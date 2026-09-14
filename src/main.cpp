@@ -333,6 +333,28 @@ RECT ZonesRect(unsigned int zones) {
     return result;
 }
 
+bool IsZoneInPreviewSpan(int zone) {
+    if (g_selectedZones == 0 || g_hotZones == 0) return false;
+    const unsigned int endpoints = g_selectedZones | g_hotZones;
+    double left = 100.0;
+    double top = 100.0;
+    double right = 0.0;
+    double bottom = 0.0;
+    for (int index = 0; index < static_cast<int>(CurrentLayout().zones.size()); ++index) {
+        if ((endpoints & (1u << index)) == 0) continue;
+        const auto& endpoint = CurrentLayout().zones[index];
+        left = std::min(left, endpoint.left);
+        top = std::min(top, endpoint.top);
+        right = std::max(right, endpoint.right);
+        bottom = std::max(bottom, endpoint.bottom);
+    }
+
+    const auto& candidate = CurrentLayout().zones[zone];
+    const double centerX = (candidate.left + candidate.right) / 2.0;
+    const double centerY = (candidate.top + candidate.bottom) / 2.0;
+    return centerX >= left && centerX <= right && centerY >= top && centerY <= bottom;
+}
+
 void CycleLayout(int direction) {
     if (g_layouts.empty()) return;
     const auto count = static_cast<int>(g_layouts.size());
@@ -814,6 +836,7 @@ void PaintOverlay(HWND window) {
     for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
         const bool selected = (g_selectedZones & (1u << zone)) != 0;
         const bool hovered = (g_hotZones & (1u << zone)) != 0;
+        const bool spanFill = !selected && !hovered && IsZoneInPreviewSpan(zone);
         const auto& normalized = CurrentLayout().zones[zone];
         RECT rect{
             static_cast<LONG>(std::round(width * normalized.left / 100.0)) + 6,
@@ -823,14 +846,16 @@ void PaintOverlay(HWND window) {
         };
         const COLORREF fillColor = selected
             ? (hovered ? RGB(36, 185, 122) : RGB(31, 145, 96))
-            : (hovered ? RGB(35, 135, 230) : RGB(65, 79, 105));
+            : (hovered ? RGB(35, 135, 230)
+                       : (spanFill ? RGB(210, 165, 28) : RGB(65, 79, 105)));
         HBRUSH fill = CreateSolidBrush(fillColor);
         FillRect(dc, &rect, fill);
         DeleteObject(fill);
 
         const int borderWidth = selected || hovered ? 5 : 2;
         const COLORREF borderColor = selected ? RGB(200, 255, 226)
-            : (hovered ? RGB(190, 225, 255) : RGB(135, 155, 185));
+            : (hovered ? RGB(190, 225, 255)
+                       : (spanFill ? RGB(255, 225, 120) : RGB(135, 155, 185)));
         HPEN pen = CreatePen(PS_SOLID, borderWidth, borderColor);
         HPEN oldPen = static_cast<HPEN>(SelectObject(dc, pen));
         HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(dc, GetStockObject(NULL_BRUSH)));

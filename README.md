@@ -79,7 +79,9 @@ The tray menu can pause all ZoneSmith behavior immediately and toggle Start with
 Windows. Changing the startup option there also updates `layouts.ini`.
 
 Hovering near a shared zone border highlights both zones. Releasing there spans
-the combined area, and wheel selection adds or removes both zones together.
+the combined area, and middle-click selection toggles both zones together.
+After selecting a zone, zones inside the live span between the selection and the
+current pointer target appear yellow.
 
 Outside a drag, hold the Windows key and use the normal vertical wheel anywhere
 over a window. Every wheel step brings the next visible overlapping top-level
