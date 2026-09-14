@@ -63,6 +63,9 @@ unsigned int g_selectedZones{};
 std::vector<Layout> g_layouts;
 size_t g_layoutIndex{};
 std::array<bool, kMaxZones> g_numberKeyDown{};
+std::vector<HWND> g_cycleWindows;
+int g_cycleIndex{-1};
+bool g_windowCycleActive{};
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
 NOTIFYICONDATAW g_trayIcon{};
@@ -356,20 +359,55 @@ BOOL CALLBACK CollectOverlappingWindow(HWND window, LPARAM data) {
     return TRUE;
 }
 
-void CycleOverlappingWindow(HWND source, int direction) {
+bool IsCycleWindow(HWND window) {
+    return window && window != g_overlay && window != GetShellWindow() &&
+           IsWindowVisible(window) && !IsIconic(window) &&
+           (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0;
+}
+
+void AdvanceWindowPreview(HWND source, int direction) {
+    if (!g_windowCycleActive) {
+        if (!IsCycleWindow(source)) return;
     WindowCycleContext context{source, VisibleWindowRect(source), {}};
     EnumWindows(CollectOverlappingWindow, reinterpret_cast<LPARAM>(&context));
     if (context.windows.size() < 2) return;
 
     const auto current = std::find(context.windows.begin(), context.windows.end(), source);
-    const int currentIndex = current == context.windows.end()
+        g_cycleIndex = current == context.windows.end()
         ? 0 : static_cast<int>(std::distance(context.windows.begin(), current));
-    const int count = static_cast<int>(context.windows.size());
-    const int nextIndex = (currentIndex + direction + count) % count;
-    HWND next = context.windows[nextIndex];
-    if (IsIconic(next)) ShowWindow(next, SW_RESTORE);
-    SetForegroundWindow(next);
-    BringWindowToTop(next);
+        g_cycleWindows = std::move(context.windows);
+        g_windowCycleActive = true;
+    }
+
+    const int count = static_cast<int>(g_cycleWindows.size());
+    for (int attempt = 0; attempt < count; ++attempt) {
+        g_cycleIndex = (g_cycleIndex + direction + count) % count;
+        if (IsWindow(g_cycleWindows[g_cycleIndex])) {
+            // Change only Z-order for the preview. Keyboard focus stays on the
+            // original window until the Windows key is released.
+            SetWindowPos(g_cycleWindows[g_cycleIndex], HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            return;
+        }
+    }
+
+    g_cycleWindows.clear();
+    g_cycleIndex = -1;
+    g_windowCycleActive = false;
+}
+
+void CommitWindowPreview() {
+    if (!g_windowCycleActive) return;
+    if (g_cycleIndex >= 0 && g_cycleIndex < static_cast<int>(g_cycleWindows.size())) {
+        HWND selected = g_cycleWindows[g_cycleIndex];
+        if (IsWindow(selected)) {
+            SetForegroundWindow(selected);
+            BringWindowToTop(selected);
+        }
+    }
+    g_cycleWindows.clear();
+    g_cycleIndex = -1;
+    g_windowCycleActive = false;
 }
 
 LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
@@ -377,10 +415,13 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
         const auto* event = reinterpret_cast<MSLLHOOKSTRUCT*>(data);
         g_cursor = event->pt;
 
-        if (message == WM_MOUSEHWHEEL && !g_leftDown) {
-            if (HWND titleBarWindow = WindowWhoseTitleBarIsAt(event->pt)) {
+        if (message == WM_MOUSEWHEEL && !g_leftDown &&
+            ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)) {
+            HWND source = GetAncestor(WindowFromPoint(event->pt), GA_ROOT);
+            if (source || g_windowCycleActive) {
                 const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
-                CycleOverlappingWindow(titleBarWindow, wheelDelta > 0 ? 1 : -1);
+                AdvanceWindowPreview(source, wheelDelta > 0 ? 1 : -1);
                 return 1;
             }
         }
@@ -450,6 +491,11 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
         const auto* event = reinterpret_cast<KBDLLHOOKSTRUCT*>(data);
         const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+        if (keyUp && (event->vkCode == VK_LWIN || event->vkCode == VK_RWIN) &&
+            g_windowCycleActive) {
+            CommitWindowPreview();
+            return 1;
+        }
         int zoneNumber = -1;
         if (event->vkCode >= '1' && event->vkCode <= '9') {
             zoneNumber = static_cast<int>(event->vkCode - '1');
@@ -623,6 +669,7 @@ std::wstring StartupMessage() {
            L"Wheel up adds a zone; wheel down removes it. Release to fit all selected zones.\n"
            L"Ctrl+wheel cycles layouts. Number keys 1-9 snap instantly.\n"
            L"Press ` during a window drag to toggle the compact zone map."
+           L"\nHold Win and scroll over a window to preview overlapping windows; release Win to select."
            L"\n\nPress Ctrl+Alt+Q to quit.";
 }
 
