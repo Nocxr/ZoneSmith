@@ -41,6 +41,18 @@ The included file provides Three Columns, Main and Stack, Two Columns, and Grid
 2x2 layouts, plus 25/50/25, Quarters 4x2, and Thirds 3x2. CMake copies it into
 the build folder automatically.
 
+Global behavior is configured in the same file:
+
+```ini
+[Settings]
+windowOverlapPercent=25
+padding=0
+```
+
+`windowOverlapPercent` controls how much of a candidate window must be covered by
+the starting window before Win+wheel includes it. `padding` is a pixel inset on
+every side of the final snapped window. Restart ZoneSmith after changing either.
+
 Hovering near a shared zone border highlights both zones. Releasing there spans
 the combined area, and wheel selection adds or removes both zones together.
 

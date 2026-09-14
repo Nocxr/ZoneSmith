@@ -75,6 +75,8 @@ int g_cycleIndex{-1};
 bool g_windowCycleActive{};
 bool g_leftWindowsDown{};
 bool g_rightWindowsDown{};
+int g_windowOverlapPercent{25};
+int g_snapPadding{};
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
 PendingRestore g_pendingRestore{};
@@ -104,6 +106,12 @@ void AddFallbackLayout() {
 
 void LoadLayouts() {
     const std::wstring path = LayoutFilePath().wstring();
+    g_windowOverlapPercent = std::clamp(
+        GetPrivateProfileIntW(L"Settings", L"windowOverlapPercent", 25, path.c_str()),
+        0u, 100u);
+    g_snapPadding = std::clamp(
+        GetPrivateProfileIntW(L"Settings", L"padding", 0, path.c_str()),
+        0u, 500u);
     std::array<wchar_t, 8192> sectionNames{};
     GetPrivateProfileSectionNamesW(sectionNames.data(),
                                    static_cast<DWORD>(sectionNames.size()), path.c_str());
@@ -181,6 +189,18 @@ RECT ZonesRect(unsigned int zones) {
         result.top = std::min(result.top, rect.top);
         result.right = std::max(result.right, rect.right);
         result.bottom = std::max(result.bottom, rect.bottom);
+    }
+    if (result.left != LONG_MAX && g_snapPadding > 0) {
+        const LONG maxHorizontalPadding = std::max(0L, (result.right - result.left - 1) / 2);
+        const LONG maxVerticalPadding = std::max(0L, (result.bottom - result.top - 1) / 2);
+        const LONG horizontalPadding = std::min(static_cast<LONG>(g_snapPadding),
+                                                maxHorizontalPadding);
+        const LONG verticalPadding = std::min(static_cast<LONG>(g_snapPadding),
+                                              maxVerticalPadding);
+        result.left += horizontalPadding;
+        result.right -= horizontalPadding;
+        result.top += verticalPadding;
+        result.bottom -= verticalPadding;
     }
     return result;
 }
@@ -367,7 +387,15 @@ BOOL CALLBACK CollectOverlappingWindow(HWND window, LPARAM data) {
     RECT rect{};
     if (!GetWindowRect(window, &rect)) return TRUE;
     RECT overlap{};
-    if (IntersectRect(&overlap, &context.sourceRect, &rect)) context.windows.push_back(window);
+    if (IntersectRect(&overlap, &context.sourceRect, &rect)) {
+        const long long overlapArea =
+            static_cast<long long>(overlap.right - overlap.left) * (overlap.bottom - overlap.top);
+        const long long candidateArea =
+            static_cast<long long>(rect.right - rect.left) * (rect.bottom - rect.top);
+        if (candidateArea > 0 && overlapArea * 100 >= candidateArea * g_windowOverlapPercent) {
+            context.windows.push_back(window);
+        }
+    }
     return TRUE;
 }
 
