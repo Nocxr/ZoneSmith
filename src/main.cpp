@@ -4,14 +4,18 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
+#include <filesystem>
+#include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
 constexpr wchar_t kOverlayClass[] = L"ZoneSmithOverlay";
-constexpr int kZoneCount = 3;
+constexpr int kMaxZones = 9;
 constexpr int kQuitHotkeyId = 1;
 constexpr UINT_PTR kSnapTimerId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
@@ -26,6 +30,18 @@ struct SavedWindow {
 struct PendingSnap {
     HWND window{};
     RECT target{};
+};
+
+struct NormalizedRect {
+    double left{};
+    double top{};
+    double right{};
+    double bottom{};
+};
+
+struct Layout {
+    std::wstring name;
+    std::vector<NormalizedRect> zones;
 };
 
 HINSTANCE g_instance{};
@@ -44,11 +60,65 @@ bool g_compactMode{};
 bool g_backtickDown{};
 int g_hotZone{-1};
 unsigned int g_selectedZones{};
+std::vector<Layout> g_layouts;
+size_t g_layoutIndex{};
+std::array<bool, kMaxZones> g_numberKeyDown{};
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
 NOTIFYICONDATAW g_trayIcon{};
 
 std::wstring StartupMessage();
+void ShowOverlay(POINT point);
+
+const Layout& CurrentLayout() {
+    return g_layouts[g_layoutIndex];
+}
+
+std::filesystem::path LayoutFilePath() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    return std::filesystem::path(std::wstring(path.data(), length)).replace_filename(L"layouts.ini");
+}
+
+void AddFallbackLayout() {
+    g_layouts.push_back(Layout{L"Three Columns", {
+        {0.0, 0.0, 33.333, 100.0},
+        {33.333, 0.0, 66.667, 100.0},
+        {66.667, 0.0, 100.0, 100.0},
+    }});
+}
+
+void LoadLayouts() {
+    const std::wstring path = LayoutFilePath().wstring();
+    std::array<wchar_t, 8192> sectionNames{};
+    GetPrivateProfileSectionNamesW(sectionNames.data(),
+                                   static_cast<DWORD>(sectionNames.size()), path.c_str());
+
+    for (const wchar_t* section = sectionNames.data(); *section;
+         section += wcslen(section) + 1) {
+        Layout layout;
+        layout.name = section;
+        for (int index = 1; index <= kMaxZones; ++index) {
+            const std::wstring key = L"zone" + std::to_wstring(index);
+            std::array<wchar_t, 256> value{};
+            GetPrivateProfileStringW(section, key.c_str(), L"", value.data(),
+                                     static_cast<DWORD>(value.size()), path.c_str());
+            if (value[0] == L'\0') continue;
+
+            std::wstring coordinates = value.data();
+            std::replace(coordinates.begin(), coordinates.end(), L',', L' ');
+            std::wistringstream stream(coordinates);
+            NormalizedRect zone{};
+            if (stream >> zone.left >> zone.top >> zone.right >> zone.bottom &&
+                zone.left >= 0.0 && zone.top >= 0.0 && zone.right <= 100.0 &&
+                zone.bottom <= 100.0 && zone.right > zone.left && zone.bottom > zone.top) {
+                layout.zones.push_back(zone);
+            }
+        }
+        if (!layout.zones.empty()) g_layouts.push_back(std::move(layout));
+    }
+    if (g_layouts.empty()) AddFallbackLayout();
+}
 
 RECT VisibleWindowRect(HWND window) {
     RECT rect{};
@@ -76,31 +146,52 @@ HWND WindowWhoseTitleBarIsAt(POINT point) {
 int ZoneAt(POINT point) {
     const RECT& selectionArea = g_compactMode ? g_overlayBounds : g_monitorWork;
     if (!PtInRect(&selectionArea, point)) return -1;
-    const int width = selectionArea.right - selectionArea.left;
-    const int relativeX = point.x - selectionArea.left;
-    return std::min(kZoneCount - 1, relativeX * kZoneCount / std::max(1, width));
+    for (size_t zone = 0; zone < CurrentLayout().zones.size(); ++zone) {
+        const auto& normalized = CurrentLayout().zones[zone];
+        const double width = selectionArea.right - selectionArea.left;
+        const double height = selectionArea.bottom - selectionArea.top;
+        RECT rect{
+            selectionArea.left + static_cast<LONG>(std::round(width * normalized.left / 100.0)),
+            selectionArea.top + static_cast<LONG>(std::round(height * normalized.top / 100.0)),
+            selectionArea.left + static_cast<LONG>(std::round(width * normalized.right / 100.0)),
+            selectionArea.top + static_cast<LONG>(std::round(height * normalized.bottom / 100.0)),
+        };
+        if (PtInRect(&rect, point)) return static_cast<int>(zone);
+    }
+    return -1;
 }
 
 RECT ZoneRect(int zone) {
-    const int width = g_monitorWork.right - g_monitorWork.left;
-    RECT result = g_monitorWork;
-    result.left = g_monitorWork.left + (width * zone) / kZoneCount;
-    result.right = g_monitorWork.left + (width * (zone + 1)) / kZoneCount;
-    return result;
+    const auto& normalized = CurrentLayout().zones[zone];
+    const double width = g_monitorWork.right - g_monitorWork.left;
+    const double height = g_monitorWork.bottom - g_monitorWork.top;
+    return RECT{
+        g_monitorWork.left + static_cast<LONG>(std::round(width * normalized.left / 100.0)),
+        g_monitorWork.top + static_cast<LONG>(std::round(height * normalized.top / 100.0)),
+        g_monitorWork.left + static_cast<LONG>(std::round(width * normalized.right / 100.0)),
+        g_monitorWork.top + static_cast<LONG>(std::round(height * normalized.bottom / 100.0)),
+    };
 }
 
 RECT SelectedZonesRect() {
-    int first = -1;
-    int last = -1;
-    for (int zone = 0; zone < kZoneCount; ++zone) {
+    RECT result{LONG_MAX, LONG_MAX, LONG_MIN, LONG_MIN};
+    for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
         if ((g_selectedZones & (1u << zone)) == 0) continue;
-        if (first < 0) first = zone;
-        last = zone;
+        const RECT rect = ZoneRect(zone);
+        result.left = std::min(result.left, rect.left);
+        result.top = std::min(result.top, rect.top);
+        result.right = std::max(result.right, rect.right);
+        result.bottom = std::max(result.bottom, rect.bottom);
     }
-    if (first < 0) return RECT{};
-    RECT result = ZoneRect(first);
-    result.right = ZoneRect(last).right;
     return result;
+}
+
+void CycleLayout(int direction) {
+    if (g_layouts.empty()) return;
+    const auto count = static_cast<int>(g_layouts.size());
+    g_layoutIndex = static_cast<size_t>((static_cast<int>(g_layoutIndex) + direction + count) % count);
+    g_selectedZones = 0;
+    ShowOverlay(g_cursor);
 }
 
 void SelectMonitor(POINT point) {
@@ -266,9 +357,12 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
             }
         } else if (message == WM_MOUSEWHEEL && g_leftDown && g_dragWindow &&
                    g_overlayVisible) {
-            const int zone = ZoneAt(event->pt);
-            if (zone >= 0) {
-                const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
+            const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
+            if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
+                CycleLayout(wheelDelta > 0 ? 1 : -1);
+            } else {
+                const int zone = ZoneAt(event->pt);
+                if (zone >= 0) {
                 if (wheelDelta > 0) {
                     g_selectedZones |= 1u << zone;
                 } else if (wheelDelta < 0) {
@@ -276,6 +370,7 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
                 }
                 g_hotZone = zone;
                 InvalidateRect(g_overlay, nullptr, TRUE);
+                }
             }
             return 1;
         } else if (message == WM_RBUTTONDOWN && g_leftDown && g_dragWindow) {
@@ -305,6 +400,32 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
         const auto* event = reinterpret_cast<KBDLLHOOKSTRUCT*>(data);
         const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+        int zoneNumber = -1;
+        if (event->vkCode >= '1' && event->vkCode <= '9') {
+            zoneNumber = static_cast<int>(event->vkCode - '1');
+        } else if (event->vkCode >= VK_NUMPAD1 && event->vkCode <= VK_NUMPAD9) {
+            zoneNumber = static_cast<int>(event->vkCode - VK_NUMPAD1);
+        }
+
+        if (zoneNumber >= 0) {
+            if (keyUp && g_numberKeyDown[zoneNumber]) {
+                g_numberKeyDown[zoneNumber] = false;
+                return 1;
+            }
+            if (keyDown && g_leftDown && g_dragWindow && g_overlayVisible &&
+                zoneNumber < static_cast<int>(CurrentLayout().zones.size())) {
+                if (!g_numberKeyDown[zoneNumber]) {
+                    g_numberKeyDown[zoneNumber] = true;
+                    g_selectedZones = 0;
+                    g_hotZone = zoneNumber;
+                    const HWND draggedWindow = g_dragWindow;
+                    PostMessageW(draggedWindow, WM_CANCELMODE, 0, 0);
+                    QueueSnap();
+                    HideOverlay();
+                }
+                return 1;
+            }
+        }
 
         if (event->vkCode == VK_OEM_3) {
             if (keyUp) g_backtickDown = false;
@@ -343,12 +464,18 @@ void PaintOverlay(HWND window) {
                              CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     HFONT oldFont = static_cast<HFONT>(SelectObject(dc, font));
 
-    const int width = client.right;
-    for (int zone = 0; zone < kZoneCount; ++zone) {
+    const double width = client.right;
+    const double height = client.bottom;
+    for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
         const bool selected = (g_selectedZones & (1u << zone)) != 0;
         const bool hovered = zone == g_hotZone;
-        RECT rect{(width * zone) / kZoneCount + 8, 8,
-                  (width * (zone + 1)) / kZoneCount - 8, client.bottom - 8};
+        const auto& normalized = CurrentLayout().zones[zone];
+        RECT rect{
+            static_cast<LONG>(std::round(width * normalized.left / 100.0)) + 6,
+            static_cast<LONG>(std::round(height * normalized.top / 100.0)) + 6,
+            static_cast<LONG>(std::round(width * normalized.right / 100.0)) - 6,
+            static_cast<LONG>(std::round(height * normalized.bottom / 100.0)) - 6,
+        };
         const COLORREF fillColor = selected
             ? (hovered ? RGB(36, 185, 122) : RGB(31, 145, 96))
             : (hovered ? RGB(35, 135, 230) : RGB(65, 79, 105));
@@ -374,7 +501,19 @@ void PaintOverlay(HWND window) {
                  number.c_str(), static_cast<int>(number.size()));
     }
 
+    HFONT labelFont = CreateFontW(g_compactMode ? 18 : 26, 0, 0, 0, FW_SEMIBOLD,
+                                  FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    SelectObject(dc, labelFont);
+    SetTextAlign(dc, TA_LEFT | TA_TOP);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT labelRect{12, 10, client.right - 12, client.bottom - 10};
+    DrawTextW(dc, CurrentLayout().name.c_str(), -1, &labelRect,
+              DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(dc, oldFont);
+    DeleteObject(labelFont);
+
     DeleteObject(font);
     EndPaint(window, &paint);
 }
@@ -432,6 +571,7 @@ std::wstring StartupMessage() {
            std::to_wstring(height) +
            L"\n\nLeft-drag a window, then right-click to reveal zones. "
            L"Wheel up adds a zone; wheel down removes it. Release to fit all selected zones.\n"
+           L"Ctrl+wheel cycles layouts. Number keys 1-9 snap instantly.\n"
            L"Press ` during a window drag to toggle the compact zone map."
            L"\n\nPress Ctrl+Alt+Q to quit.";
 }
@@ -440,6 +580,7 @@ std::wstring StartupMessage() {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     g_instance = instance;
+    LoadLayouts();
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.hInstance = instance;
