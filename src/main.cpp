@@ -67,6 +67,7 @@ RECT g_overlayBounds{};
 bool g_leftDown{};
 bool g_overlayVisible{};
 bool g_swallowRightUp{};
+bool g_swallowMiddleUp{};
 bool g_compactMode{};
 bool g_backtickDown{};
 unsigned int g_hotZones{};
@@ -658,20 +659,20 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
         } else if (message == WM_MOUSEWHEEL && g_leftDown && g_dragWindow &&
                    g_overlayVisible) {
             const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
-            if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
-                CycleLayout(wheelDelta > 0 ? 1 : -1);
-            } else {
-                const unsigned int zones = ZonesAt(event->pt);
-                if (zones != 0) {
-                if (wheelDelta > 0) {
-                    g_selectedZones |= zones;
-                } else if (wheelDelta < 0) {
-                    g_selectedZones &= ~zones;
-                }
+            CycleLayout(wheelDelta > 0 ? 1 : -1);
+            return 1;
+        } else if (message == WM_MBUTTONDOWN && g_leftDown && g_dragWindow &&
+                   g_overlayVisible) {
+            const unsigned int zones = ZonesAt(event->pt);
+            if (zones != 0) {
+                g_selectedZones ^= zones;
                 g_hotZones = zones;
                 InvalidateRect(g_overlay, nullptr, TRUE);
-                }
             }
+            g_swallowMiddleUp = true;
+            return 1;
+        } else if (message == WM_MBUTTONUP && g_swallowMiddleUp) {
+            g_swallowMiddleUp = false;
             return 1;
         } else if (message == WM_RBUTTONDOWN && g_leftDown && g_dragWindow) {
             if (g_overlayVisible) {
@@ -936,8 +937,8 @@ std::wstring StartupMessage() {
     return L"ZoneSmith is running.\n\nCurrent monitor: " + std::to_wstring(width) + L" x " +
            std::to_wstring(height) +
            L"\n\nLeft-drag a window, then right-click to reveal zones. "
-           L"Wheel up adds a zone; wheel down removes it. Release to fit all selected zones.\n"
-           L"Ctrl+wheel cycles layouts. Number keys 1-9 snap instantly.\n"
+           L"Scroll to cycle layouts. Middle-click toggles zone selection.\n"
+           L"Number keys 1-9 snap instantly.\n"
            L"Press ` during a window drag to toggle the compact zone map."
            L"\nHold Win and scroll over a window to cycle overlapping windows to the top."
            L"\n\nPress Ctrl+Alt+Q to quit.";

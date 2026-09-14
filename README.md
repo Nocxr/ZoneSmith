@@ -9,10 +9,10 @@ A native Win32 C++ proof of concept inspired by FancyZones.
    show the zone overlay.
    Right-click again before releasing to cancel and hide it.
 3. Move over zone 1, 2, or 3 and release the left button to snap.
-4. Scroll up over a zone to add it to the selection. Scroll down over a zone to
-   remove it. Releasing stretches from the selected zones through the zone under
-   the pointer. For example, select zone 1 and release on zone 3 to span zones 1–3.
-5. Hold `Ctrl` and scroll while Zone Mode is visible to cycle through layouts.
+4. Middle-click a zone to toggle it in or out of the selection. Releasing stretches
+   from the selected zones through the zone under the pointer. For example, select
+   zone 1 and release on zone 3 to span zones 1–3.
+5. Scroll normally while Zone Mode is visible to cycle through layouts.
 6. Press `1` through `9` on the number row or numpad to snap immediately to that
    numbered zone.
 7. Drag that window again to restore its size from before the snap.
@@ -66,7 +66,7 @@ game.exe=1
 another-game.exe=1
 ```
 
-Each monitor remembers its own active layout when you use Ctrl+wheel. The choices
+Each monitor remembers its own active layout when you scroll in Zone Mode. The choices
 are written automatically using Windows display names:
 
 ```ini
