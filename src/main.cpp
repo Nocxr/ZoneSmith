@@ -58,7 +58,7 @@ bool g_overlayVisible{};
 bool g_swallowRightUp{};
 bool g_compactMode{};
 bool g_backtickDown{};
-int g_hotZone{-1};
+unsigned int g_hotZones{};
 unsigned int g_selectedZones{};
 std::vector<Layout> g_layouts;
 size_t g_layoutIndex{};
@@ -143,40 +143,39 @@ HWND WindowWhoseTitleBarIsAt(POINT point) {
     return static_cast<LRESULT>(hitTest) == HTCAPTION ? window : nullptr;
 }
 
-int ZoneAt(POINT point) {
-    const RECT& selectionArea = g_compactMode ? g_overlayBounds : g_monitorWork;
-    if (!PtInRect(&selectionArea, point)) return -1;
-    for (size_t zone = 0; zone < CurrentLayout().zones.size(); ++zone) {
-        const auto& normalized = CurrentLayout().zones[zone];
-        const double width = selectionArea.right - selectionArea.left;
-        const double height = selectionArea.bottom - selectionArea.top;
-        RECT rect{
-            selectionArea.left + static_cast<LONG>(std::round(width * normalized.left / 100.0)),
-            selectionArea.top + static_cast<LONG>(std::round(height * normalized.top / 100.0)),
-            selectionArea.left + static_cast<LONG>(std::round(width * normalized.right / 100.0)),
-            selectionArea.top + static_cast<LONG>(std::round(height * normalized.bottom / 100.0)),
-        };
-        if (PtInRect(&rect, point)) return static_cast<int>(zone);
-    }
-    return -1;
-}
-
-RECT ZoneRect(int zone) {
+RECT ZoneRectInArea(int zone, const RECT& area) {
     const auto& normalized = CurrentLayout().zones[zone];
-    const double width = g_monitorWork.right - g_monitorWork.left;
-    const double height = g_monitorWork.bottom - g_monitorWork.top;
+    const double width = area.right - area.left;
+    const double height = area.bottom - area.top;
     return RECT{
-        g_monitorWork.left + static_cast<LONG>(std::round(width * normalized.left / 100.0)),
-        g_monitorWork.top + static_cast<LONG>(std::round(height * normalized.top / 100.0)),
-        g_monitorWork.left + static_cast<LONG>(std::round(width * normalized.right / 100.0)),
-        g_monitorWork.top + static_cast<LONG>(std::round(height * normalized.bottom / 100.0)),
+        area.left + static_cast<LONG>(std::round(width * normalized.left / 100.0)),
+        area.top + static_cast<LONG>(std::round(height * normalized.top / 100.0)),
+        area.left + static_cast<LONG>(std::round(width * normalized.right / 100.0)),
+        area.top + static_cast<LONG>(std::round(height * normalized.bottom / 100.0)),
     };
 }
 
-RECT SelectedZonesRect() {
+RECT ZoneRect(int zone) {
+    return ZoneRectInArea(zone, g_monitorWork);
+}
+
+unsigned int ZonesAt(POINT point) {
+    const RECT& selectionArea = g_compactMode ? g_overlayBounds : g_monitorWork;
+    if (!PtInRect(&selectionArea, point)) return 0;
+    const int tolerance = g_compactMode ? 6 : 10;
+    unsigned int zones = 0;
+    for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
+        RECT hitArea = ZoneRectInArea(zone, selectionArea);
+        InflateRect(&hitArea, tolerance, tolerance);
+        if (PtInRect(&hitArea, point)) zones |= 1u << zone;
+    }
+    return zones;
+}
+
+RECT ZonesRect(unsigned int zones) {
     RECT result{LONG_MAX, LONG_MAX, LONG_MIN, LONG_MIN};
     for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
-        if ((g_selectedZones & (1u << zone)) == 0) continue;
+        if ((zones & (1u << zone)) == 0) continue;
         const RECT rect = ZoneRect(zone);
         result.left = std::min(result.left, rect.left);
         result.top = std::min(result.top, rect.top);
@@ -217,7 +216,7 @@ void ShowOverlay(POINT point) {
     } else {
         g_overlayBounds = g_monitorWork;
     }
-    g_hotZone = ZoneAt(point);
+    g_hotZones = ZonesAt(point);
     SetWindowPos(g_overlay, HWND_TOPMOST, g_overlayBounds.left, g_overlayBounds.top,
                  g_overlayBounds.right - g_overlayBounds.left,
                  g_overlayBounds.bottom - g_overlayBounds.top,
@@ -228,7 +227,7 @@ void ShowOverlay(POINT point) {
 
 void HideOverlay() {
     g_overlayVisible = false;
-    g_hotZone = -1;
+    g_hotZones = 0;
     ShowWindow(g_overlay, SW_HIDE);
 }
 
@@ -284,7 +283,7 @@ void RestoreBeforeDrag(HWND window, POINT cursor) {
 
 void QueueSnap() {
     if (!g_dragWindow || !IsWindow(g_dragWindow) ||
-        (g_selectedZones == 0 && g_hotZone < 0)) return;
+        (g_selectedZones == 0 && g_hotZones == 0)) return;
 
     if (!g_savedWindows.contains(g_dragWindow)) {
         const WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
@@ -294,7 +293,8 @@ void QueueSnap() {
         g_savedWindows.emplace(g_dragWindow, SavedWindow{rect, current.showCmd == SW_SHOWMAXIMIZED});
     }
 
-    const RECT target = g_selectedZones != 0 ? SelectedZonesRect() : ZoneRect(g_hotZone);
+    const unsigned int zones = g_selectedZones != 0 ? g_selectedZones : g_hotZones;
+    const RECT target = ZonesRect(zones);
     g_pendingSnap = PendingSnap{g_dragWindow, target};
     // The shell applies one final move after WM_LBUTTONUP. Run the snap just after
     // that native move loop completes so our target rectangle wins.
@@ -330,10 +330,60 @@ void CALLBACK MoveSizeEventHook(HWINEVENTHOOK, DWORD event, HWND window,
     }
 }
 
+struct WindowCycleContext {
+    HWND source{};
+    RECT sourceRect{};
+    std::vector<HWND> windows;
+};
+
+BOOL CALLBACK CollectOverlappingWindow(HWND window, LPARAM data) {
+    auto& context = *reinterpret_cast<WindowCycleContext*>(data);
+    if (window == g_overlay || window == GetShellWindow() || !IsWindowVisible(window) ||
+        IsIconic(window) || (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+        return TRUE;
+    }
+
+    DWORD cloaked{};
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+        cloaked != 0) {
+        return TRUE;
+    }
+
+    RECT rect{};
+    if (!GetWindowRect(window, &rect)) return TRUE;
+    RECT overlap{};
+    if (IntersectRect(&overlap, &context.sourceRect, &rect)) context.windows.push_back(window);
+    return TRUE;
+}
+
+void CycleOverlappingWindow(HWND source, int direction) {
+    WindowCycleContext context{source, VisibleWindowRect(source), {}};
+    EnumWindows(CollectOverlappingWindow, reinterpret_cast<LPARAM>(&context));
+    if (context.windows.size() < 2) return;
+
+    const auto current = std::find(context.windows.begin(), context.windows.end(), source);
+    const int currentIndex = current == context.windows.end()
+        ? 0 : static_cast<int>(std::distance(context.windows.begin(), current));
+    const int count = static_cast<int>(context.windows.size());
+    const int nextIndex = (currentIndex + direction + count) % count;
+    HWND next = context.windows[nextIndex];
+    if (IsIconic(next)) ShowWindow(next, SW_RESTORE);
+    SetForegroundWindow(next);
+    BringWindowToTop(next);
+}
+
 LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
     if (code == HC_ACTION) {
         const auto* event = reinterpret_cast<MSLLHOOKSTRUCT*>(data);
         g_cursor = event->pt;
+
+        if (message == WM_MOUSEHWHEEL && !g_leftDown) {
+            if (HWND titleBarWindow = WindowWhoseTitleBarIsAt(event->pt)) {
+                const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
+                CycleOverlappingWindow(titleBarWindow, wheelDelta > 0 ? 1 : -1);
+                return 1;
+            }
+        }
 
         if (message == WM_LBUTTONDOWN) {
             g_leftDown = true;
@@ -349,9 +399,9 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
                 HMONITOR oldMonitor = MonitorFromRect(&g_monitorWork, MONITOR_DEFAULTTONEAREST);
                 HMONITOR newMonitor = MonitorFromPoint(event->pt, MONITOR_DEFAULTTONEAREST);
                 if (oldMonitor != newMonitor) ShowOverlay(event->pt);
-                const int zone = ZoneAt(event->pt);
-                if (zone != g_hotZone) {
-                    g_hotZone = zone;
+                const unsigned int zones = ZonesAt(event->pt);
+                if (zones != g_hotZones) {
+                    g_hotZones = zones;
                     InvalidateRect(g_overlay, nullptr, TRUE);
                 }
             }
@@ -361,14 +411,14 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
             if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
                 CycleLayout(wheelDelta > 0 ? 1 : -1);
             } else {
-                const int zone = ZoneAt(event->pt);
-                if (zone >= 0) {
+                const unsigned int zones = ZonesAt(event->pt);
+                if (zones != 0) {
                 if (wheelDelta > 0) {
-                    g_selectedZones |= 1u << zone;
+                    g_selectedZones |= zones;
                 } else if (wheelDelta < 0) {
-                    g_selectedZones &= ~(1u << zone);
+                    g_selectedZones &= ~zones;
                 }
-                g_hotZone = zone;
+                g_hotZones = zones;
                 InvalidateRect(g_overlay, nullptr, TRUE);
                 }
             }
@@ -417,7 +467,7 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
                 if (!g_numberKeyDown[zoneNumber]) {
                     g_numberKeyDown[zoneNumber] = true;
                     g_selectedZones = 0;
-                    g_hotZone = zoneNumber;
+                    g_hotZones = 1u << zoneNumber;
                     const HWND draggedWindow = g_dragWindow;
                     PostMessageW(draggedWindow, WM_CANCELMODE, 0, 0);
                     QueueSnap();
@@ -468,7 +518,7 @@ void PaintOverlay(HWND window) {
     const double height = client.bottom;
     for (int zone = 0; zone < static_cast<int>(CurrentLayout().zones.size()); ++zone) {
         const bool selected = (g_selectedZones & (1u << zone)) != 0;
-        const bool hovered = zone == g_hotZone;
+        const bool hovered = (g_hotZones & (1u << zone)) != 0;
         const auto& normalized = CurrentLayout().zones[zone];
         RECT rect{
             static_cast<LONG>(std::round(width * normalized.left / 100.0)) + 6,

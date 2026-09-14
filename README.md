@@ -37,7 +37,14 @@ zone2=50,0,100,100
 ```
 
 The included file provides Three Columns, Main and Stack, Two Columns, and Grid
-2x2 layouts. CMake copies it into the build folder automatically.
+2x2 layouts, plus 25/50/25, Quarters 4x2, and Thirds 3x2. CMake copies it into
+the build folder automatically.
+
+Hovering near a shared zone border highlights both zones. Releasing there spans
+the combined area, and wheel selection adds or removes both zones together.
+
+Outside a drag, horizontal-wheel scrolling over a window title bar cycles through
+visible top-level windows that overlap the same screen area.
 
 ## Build
 
