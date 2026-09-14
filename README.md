@@ -44,9 +44,8 @@ Hovering near a shared zone border highlights both zones. Releasing there spans
 the combined area, and wheel selection adds or removes both zones together.
 
 Outside a drag, hold the Windows key and use the normal vertical wheel anywhere
-over a window to preview visible top-level windows that overlap its screen area.
-The previews do not take keyboard focus; release the Windows key to activate the
-currently shown window.
+over a window. Every wheel step brings the next visible overlapping top-level
+window to the front and activates it. Release the Windows key to end the cycle.
 
 ## Build
 

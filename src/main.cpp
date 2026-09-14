@@ -387,10 +387,12 @@ void AdvanceWindowPreview(HWND source, int direction) {
     for (int attempt = 0; attempt < count; ++attempt) {
         g_cycleIndex = (g_cycleIndex + direction + count) % count;
         if (IsWindow(g_cycleWindows[g_cycleIndex])) {
-            // Change only Z-order for the preview. Keyboard focus stays on the
-            // original window until the Windows key is released.
-            SetWindowPos(g_cycleWindows[g_cycleIndex], HWND_TOP, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            // Every wheel step promotes the next overlapping window immediately.
+            HWND selected = g_cycleWindows[g_cycleIndex];
+            SetWindowPos(selected, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetForegroundWindow(selected);
+            BringWindowToTop(selected);
             return;
         }
     }
@@ -402,13 +404,6 @@ void AdvanceWindowPreview(HWND source, int direction) {
 
 void CommitWindowPreview() {
     if (!g_windowCycleActive) return;
-    if (g_cycleIndex >= 0 && g_cycleIndex < static_cast<int>(g_cycleWindows.size())) {
-        HWND selected = g_cycleWindows[g_cycleIndex];
-        if (IsWindow(selected)) {
-            SetForegroundWindow(selected);
-            BringWindowToTop(selected);
-        }
-    }
     g_cycleWindows.clear();
     g_cycleIndex = -1;
     g_windowCycleActive = false;
@@ -694,7 +689,7 @@ std::wstring StartupMessage() {
            L"Wheel up adds a zone; wheel down removes it. Release to fit all selected zones.\n"
            L"Ctrl+wheel cycles layouts. Number keys 1-9 snap instantly.\n"
            L"Press ` during a window drag to toggle the compact zone map."
-           L"\nHold Win and scroll over a window to preview overlapping windows; release Win to select."
+           L"\nHold Win and scroll over a window to cycle overlapping windows to the top."
            L"\n\nPress Ctrl+Alt+Q to quit.";
 }
 
