@@ -20,7 +20,8 @@ constexpr int kQuitHotkeyId = 1;
 constexpr UINT_PTR kSnapTimerId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kTrayInstructionsId = 1001;
-constexpr UINT kTrayExitId = 1002;
+constexpr UINT kTrayLayoutsId = 1002;
+constexpr UINT kTrayExitId = 1003;
 
 struct SavedWindow {
     RECT rect{};
@@ -66,6 +67,8 @@ std::array<bool, kMaxZones> g_numberKeyDown{};
 std::vector<HWND> g_cycleWindows;
 int g_cycleIndex{-1};
 bool g_windowCycleActive{};
+bool g_leftWindowsDown{};
+bool g_rightWindowsDown{};
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
 NOTIFYICONDATAW g_trayIcon{};
@@ -258,6 +261,7 @@ void ShowTrayMenu() {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     AppendMenuW(menu, MF_STRING, kTrayInstructionsId, L"How to use ZoneSmith");
+    AppendMenuW(menu, MF_STRING, kTrayLayoutsId, L"Open layouts.ini");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayExitId, L"Exit ZoneSmith");
     SetForegroundWindow(g_overlay);
@@ -416,8 +420,7 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
         g_cursor = event->pt;
 
         if (message == WM_MOUSEWHEEL && !g_leftDown &&
-            ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
-             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)) {
+            (g_leftWindowsDown || g_rightWindowsDown)) {
             HWND source = GetAncestor(WindowFromPoint(event->pt), GA_ROOT);
             if (source || g_windowCycleActive) {
                 const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
@@ -491,10 +494,27 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
         const auto* event = reinterpret_cast<KBDLLHOOKSTRUCT*>(data);
         const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+        if (event->vkCode == VK_LWIN) {
+            if (keyDown) g_leftWindowsDown = true;
+            if (keyUp) g_leftWindowsDown = false;
+        } else if (event->vkCode == VK_RWIN) {
+            if (keyDown) g_rightWindowsDown = true;
+            if (keyUp) g_rightWindowsDown = false;
+        }
         if (keyUp && (event->vkCode == VK_LWIN || event->vkCode == VK_RWIN) &&
-            g_windowCycleActive) {
+            !g_leftWindowsDown && !g_rightWindowsDown && g_windowCycleActive) {
             CommitWindowPreview();
-            return 1;
+
+            // The Windows-key press was delivered to the shell, so its release
+            // must also be delivered. A harmless Ctrl tap marks it as a chord
+            // and prevents the Start menu from opening after the gesture.
+            std::array<INPUT, 2> inputs{};
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].ki.wVk = VK_CONTROL;
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].ki.wVk = VK_CONTROL;
+            inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
         }
         int zoneNumber = -1;
         if (event->vkCode >= '1' && event->vkCode <= '9') {
@@ -643,6 +663,11 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         if (LOWORD(wParam) == kTrayInstructionsId) {
             MessageBoxW(nullptr, StartupMessage().c_str(), L"ZoneSmith POC",
                         MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+            return 0;
+        }
+        if (LOWORD(wParam) == kTrayLayoutsId) {
+            const std::wstring path = LayoutFilePath().wstring();
+            ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
         }
         if (LOWORD(wParam) == kTrayExitId) {

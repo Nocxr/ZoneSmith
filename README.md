@@ -20,7 +20,7 @@ A native Win32 C++ proof of concept inspired by FancyZones.
 9. Press `Ctrl+Alt+Q` to quit ZoneSmith. Press `Esc` to dismiss Zone Mode.
 
 ZoneSmith also stays accessible from its notification-area icon. Right-click the
-icon for usage instructions or to exit the app.
+icon for usage instructions, to open `layouts.ini`, or to exit the app.
 
 The three zones use the current monitor's working area, so the taskbar is not covered.
 
