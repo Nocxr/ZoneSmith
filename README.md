@@ -10,7 +10,8 @@ A native Win32 C++ proof of concept inspired by FancyZones.
    Right-click again before releasing to cancel and hide it.
 3. Move over zone 1, 2, or 3 and release the left button to snap.
 4. Scroll up over a zone to add it to the selection. Scroll down over a zone to
-   remove it. Releasing stretches the window across all selected zones.
+   remove it. Releasing stretches from the selected zones through the zone under
+   the pointer. For example, select zone 1 and release on zone 3 to span zones 1–3.
 5. Hold `Ctrl` and scroll while Zone Mode is visible to cycle through layouts.
 6. Press `1` through `9` on the number row or numpad to snap immediately to that
    numbered zone.

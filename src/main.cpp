@@ -33,6 +33,12 @@ struct PendingSnap {
     RECT target{};
 };
 
+struct PendingRestore {
+    HWND window{};
+    SIZE size{};
+    POINT cursor{};
+};
+
 struct NormalizedRect {
     double left{};
     double top{};
@@ -71,6 +77,8 @@ bool g_leftWindowsDown{};
 bool g_rightWindowsDown{};
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
+PendingRestore g_pendingRestore{};
+HWND g_restoreOnReleaseWindow{};
 NOTIFYICONDATAW g_trayIcon{};
 
 std::wstring StartupMessage();
@@ -133,20 +141,6 @@ RECT VisibleWindowRect(HWND window) {
         GetWindowRect(window, &rect);
     }
     return rect;
-}
-
-HWND WindowWhoseTitleBarIsAt(POINT point) {
-    HWND window = GetAncestor(WindowFromPoint(point), GA_ROOT);
-    if (!window || window == g_overlay || !IsWindowVisible(window)) return nullptr;
-
-    DWORD_PTR hitTest{};
-    const LPARAM coordinates = MAKELPARAM(static_cast<SHORT>(point.x),
-                                          static_cast<SHORT>(point.y));
-    if (!SendMessageTimeoutW(window, WM_NCHITTEST, 0, coordinates,
-                             SMTO_ABORTIFHUNG, 50, &hitTest)) {
-        return nullptr;
-    }
-    return static_cast<LRESULT>(hitTest) == HTCAPTION ? window : nullptr;
 }
 
 RECT ZoneRectInArea(int zone, const RECT& area) {
@@ -270,24 +264,6 @@ void ShowTrayMenu() {
     DestroyMenu(menu);
 }
 
-void RestoreBeforeDrag(HWND window, POINT cursor) {
-    const auto found = g_savedWindows.find(window);
-    if (found == g_savedWindows.end()) return;
-
-    const RECT current = VisibleWindowRect(window);
-    const LONG currentWidth = std::max(1L, current.right - current.left);
-    const int savedWidth = found->second.rect.right - found->second.rect.left;
-    const int savedHeight = found->second.rect.bottom - found->second.rect.top;
-    const double horizontalRatio = static_cast<double>(cursor.x - current.left) / currentWidth;
-    const int newLeft = cursor.x - static_cast<int>(std::round(horizontalRatio * savedWidth));
-    const int newTop = cursor.y - std::min(cursor.y - current.top, 40L);
-
-    if (IsZoomed(window)) ShowWindow(window, SW_RESTORE);
-    SetWindowPos(window, nullptr, newLeft, newTop, savedWidth, savedHeight,
-                 SWP_NOACTIVATE | SWP_NOZORDER);
-    g_savedWindows.erase(found);
-}
-
 void QueueSnap() {
     if (!g_dragWindow || !IsWindow(g_dragWindow) ||
         (g_selectedZones == 0 && g_hotZones == 0)) return;
@@ -300,27 +276,57 @@ void QueueSnap() {
         g_savedWindows.emplace(g_dragWindow, SavedWindow{rect, current.showCmd == SW_SHOWMAXIMIZED});
     }
 
-    const unsigned int zones = g_selectedZones != 0 ? g_selectedZones : g_hotZones;
+    const unsigned int zones = g_selectedZones != 0
+        ? (g_selectedZones | g_hotZones) : g_hotZones;
     const RECT target = ZonesRect(zones);
     g_pendingSnap = PendingSnap{g_dragWindow, target};
+    g_pendingRestore = {};
+    g_restoreOnReleaseWindow = nullptr;
     // The shell applies one final move after WM_LBUTTONUP. Run the snap just after
     // that native move loop completes so our target rectangle wins.
     SetTimer(g_overlay, kSnapTimerId, 75, nullptr);
 }
 
-void ApplyPendingSnap() {
+void QueueRestoreAfterMove(HWND window, POINT cursor) {
+    const auto found = g_savedWindows.find(window);
+    if (found == g_savedWindows.end()) return;
+    g_pendingSnap = {};
+    g_pendingRestore = PendingRestore{
+        window,
+        SIZE{found->second.rect.right - found->second.rect.left,
+             found->second.rect.bottom - found->second.rect.top},
+        cursor,
+    };
+    SetTimer(g_overlay, kSnapTimerId, 75, nullptr);
+}
+
+void ApplyPendingOperation() {
     KillTimer(g_overlay, kSnapTimerId);
-    if (!g_pendingSnap.window || !IsWindow(g_pendingSnap.window)) {
+    if (g_pendingSnap.window && IsWindow(g_pendingSnap.window)) {
+        if (IsZoomed(g_pendingSnap.window)) ShowWindow(g_pendingSnap.window, SW_RESTORE);
+        const RECT target = g_pendingSnap.target;
+        SetWindowPos(g_pendingSnap.window, nullptr, target.left, target.top,
+                     target.right - target.left, target.bottom - target.top,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
         g_pendingSnap = {};
         return;
     }
-
-    if (IsZoomed(g_pendingSnap.window)) ShowWindow(g_pendingSnap.window, SW_RESTORE);
-    const RECT target = g_pendingSnap.target;
-    SetWindowPos(g_pendingSnap.window, nullptr, target.left, target.top,
-                 target.right - target.left, target.bottom - target.top,
-                 SWP_NOACTIVATE | SWP_NOZORDER);
     g_pendingSnap = {};
+
+    if (g_pendingRestore.window && IsWindow(g_pendingRestore.window)) {
+        const RECT current = VisibleWindowRect(g_pendingRestore.window);
+        const LONG currentWidth = std::max(1L, current.right - current.left);
+        const double ratio = std::clamp(
+            static_cast<double>(g_pendingRestore.cursor.x - current.left) / currentWidth,
+            0.0, 1.0);
+        const int left = g_pendingRestore.cursor.x -
+            static_cast<int>(std::round(ratio * g_pendingRestore.size.cx));
+        SetWindowPos(g_pendingRestore.window, nullptr, left, current.top,
+                     g_pendingRestore.size.cx, g_pendingRestore.size.cy,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+        g_savedWindows.erase(g_pendingRestore.window);
+    }
+    g_pendingRestore = {};
 }
 
 void CALLBACK MoveSizeEventHook(HWINEVENTHOOK, DWORD event, HWND window,
@@ -331,6 +337,8 @@ void CALLBACK MoveSizeEventHook(HWINEVENTHOOK, DWORD event, HWND window,
         // This event is emitted only when Windows enters its native top-level
         // move/resize loop (title bar, caption, or non-client sizing handle).
         g_dragWindow = GetAncestor(window, GA_ROOT);
+        g_restoreOnReleaseWindow = g_savedWindows.contains(g_dragWindow)
+            ? g_dragWindow : nullptr;
     } else if (event == EVENT_SYSTEM_MOVESIZEEND && !g_leftDown) {
         g_dragWindow = nullptr;
         HideOverlay();
@@ -426,13 +434,6 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
 
         if (message == WM_LBUTTONDOWN) {
             g_leftDown = true;
-            // Restore before the target receives the click. Its native move loop
-            // will therefore start with the remembered dimensions instead of
-            // fighting a resize performed in the middle of the drag.
-            if (HWND titleBarWindow = WindowWhoseTitleBarIsAt(event->pt);
-                titleBarWindow && g_savedWindows.contains(titleBarWindow)) {
-                RestoreBeforeDrag(titleBarWindow, event->pt);
-            }
         } else if (message == WM_MOUSEMOVE && g_leftDown) {
             if (g_overlayVisible) {
                 HMONITOR oldMonitor = MonitorFromRect(&g_monitorWork, MONITOR_DEFAULTTONEAREST);
@@ -475,10 +476,15 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
             g_swallowRightUp = false;
             return 1;
         } else if (message == WM_LBUTTONUP) {
-            if (g_overlayVisible) QueueSnap();
+            if (g_overlayVisible) {
+                QueueSnap();
+            } else if (g_restoreOnReleaseWindow == g_dragWindow) {
+                QueueRestoreAfterMove(g_dragWindow, event->pt);
+            }
             HideOverlay();
             g_leftDown = false;
             g_dragWindow = nullptr;
+            g_restoreOnReleaseWindow = nullptr;
         }
     }
     return CallNextHookEx(g_mouseHook, code, message, data);
@@ -650,7 +656,7 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         return HTTRANSPARENT;
     case WM_TIMER:
         if (wParam == kSnapTimerId) {
-            ApplyPendingSnap();
+            ApplyPendingOperation();
             return 0;
         }
         break;
