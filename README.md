@@ -47,11 +47,36 @@ Global behavior is configured in the same file:
 [Settings]
 windowOverlapPercent=25
 padding=0
+pauseInFullscreen=true
+startWithWindows=false
 ```
 
 `windowOverlapPercent` controls how much of a candidate window must be covered by
 the starting window before Win+wheel includes it. `padding` is a pixel inset on
 every side of the final snapped window. Restart ZoneSmith after changing either.
+
+ZoneSmith automatically suspends its hooks while a fullscreen or borderless-
+fullscreen foreground window is active when `pauseInFullscreen=true`.
+
+Exclude specific programs by executable filename:
+
+```ini
+[ExcludedApps]
+game.exe=1
+another-game.exe=1
+```
+
+Each monitor remembers its own active layout when you use Ctrl+wheel. The choices
+are written automatically using Windows display names:
+
+```ini
+[MonitorLayouts]
+display1=Three Columns
+display2=Grid 2x2
+```
+
+The tray menu can pause all ZoneSmith behavior immediately and toggle Start with
+Windows. Changing the startup option there also updates `layouts.ini`.
 
 Hovering near a shared zone border highlights both zones. Releasing there spans
 the combined area, and wheel selection adds or removes both zones together.

@@ -6,10 +6,12 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <cwctype>
 #include <filesystem>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -21,7 +23,9 @@ constexpr UINT_PTR kSnapTimerId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kTrayInstructionsId = 1001;
 constexpr UINT kTrayLayoutsId = 1002;
-constexpr UINT kTrayExitId = 1003;
+constexpr UINT kTrayPauseId = 1003;
+constexpr UINT kTrayStartupId = 1004;
+constexpr UINT kTrayExitId = 1005;
 
 struct SavedWindow {
     RECT rect{};
@@ -77,6 +81,12 @@ bool g_leftWindowsDown{};
 bool g_rightWindowsDown{};
 int g_windowOverlapPercent{25};
 int g_snapPadding{};
+bool g_pauseInFullscreen{true};
+bool g_startWithWindows{};
+bool g_paused{};
+std::wstring g_currentMonitorKey;
+std::unordered_map<std::wstring, std::wstring> g_monitorLayouts;
+std::unordered_set<std::wstring> g_excludedApps;
 std::unordered_map<HWND, SavedWindow> g_savedWindows;
 PendingSnap g_pendingSnap{};
 PendingRestore g_pendingRestore{};
@@ -96,6 +106,37 @@ std::filesystem::path LayoutFilePath() {
     return std::filesystem::path(std::wstring(path.data(), length)).replace_filename(L"layouts.ini");
 }
 
+std::wstring Lowercase(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](wchar_t character) { return static_cast<wchar_t>(towlower(character)); });
+    return value;
+}
+
+bool ReadBoolSetting(const wchar_t* key, bool fallback, const std::wstring& path) {
+    std::array<wchar_t, 32> value{};
+    GetPrivateProfileStringW(L"Settings", key, fallback ? L"true" : L"false",
+                             value.data(), static_cast<DWORD>(value.size()), path.c_str());
+    const std::wstring normalized = Lowercase(value.data());
+    return normalized == L"true" || normalized == L"yes" || normalized == L"on" ||
+           normalized == L"1";
+}
+
+std::vector<std::pair<std::wstring, std::wstring>> ReadIniSection(
+    const wchar_t* section, const std::wstring& path) {
+    std::array<wchar_t, 16384> values{};
+    GetPrivateProfileSectionW(section, values.data(), static_cast<DWORD>(values.size()),
+                              path.c_str());
+    std::vector<std::pair<std::wstring, std::wstring>> result;
+    for (const wchar_t* entry = values.data(); *entry; entry += wcslen(entry) + 1) {
+        const std::wstring line = entry;
+        const size_t separator = line.find(L'=');
+        if (separator != std::wstring::npos) {
+            result.emplace_back(line.substr(0, separator), line.substr(separator + 1));
+        }
+    }
+    return result;
+}
+
 void AddFallbackLayout() {
     g_layouts.push_back(Layout{L"Three Columns", {
         {0.0, 0.0, 33.333, 100.0},
@@ -112,12 +153,29 @@ void LoadLayouts() {
     g_snapPadding = std::clamp(
         GetPrivateProfileIntW(L"Settings", L"padding", 0, path.c_str()),
         0u, 500u);
+    g_pauseInFullscreen = ReadBoolSetting(L"pauseInFullscreen", true, path);
+    g_startWithWindows = ReadBoolSetting(L"startWithWindows", false, path);
+
+    for (const auto& [name, enabled] : ReadIniSection(L"ExcludedApps", path)) {
+        const std::wstring normalized = Lowercase(enabled);
+        if (normalized != L"0" && normalized != L"false" && normalized != L"off") {
+            g_excludedApps.insert(Lowercase(std::filesystem::path(name).filename().wstring()));
+        }
+    }
+    for (const auto& [monitor, layout] : ReadIniSection(L"MonitorLayouts", path)) {
+        if (!monitor.empty() && !layout.empty()) g_monitorLayouts[Lowercase(monitor)] = layout;
+    }
     std::array<wchar_t, 8192> sectionNames{};
     GetPrivateProfileSectionNamesW(sectionNames.data(),
                                    static_cast<DWORD>(sectionNames.size()), path.c_str());
 
     for (const wchar_t* section = sectionNames.data(); *section;
          section += wcslen(section) + 1) {
+        if (_wcsicmp(section, L"Settings") == 0 ||
+            _wcsicmp(section, L"ExcludedApps") == 0 ||
+            _wcsicmp(section, L"MonitorLayouts") == 0) {
+            continue;
+        }
         Layout layout;
         layout.name = section;
         for (int index = 1; index <= kMaxZones; ++index) {
@@ -142,6 +200,26 @@ void LoadLayouts() {
     if (g_layouts.empty()) AddFallbackLayout();
 }
 
+void ApplyStartupSetting() {
+    constexpr wchar_t runKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    HKEY key{};
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, runKey, 0, nullptr, 0, KEY_SET_VALUE,
+                        nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return;
+    }
+    if (g_startWithWindows) {
+        const std::wstring command = L"\"" +
+            std::filesystem::absolute(LayoutFilePath().replace_filename(L"ZoneSmith.exe")).wstring() +
+            L"\"";
+        RegSetValueExW(key, L"ZoneSmith", 0, REG_SZ,
+                       reinterpret_cast<const BYTE*>(command.c_str()),
+                       static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+    } else {
+        RegDeleteValueW(key, L"ZoneSmith");
+    }
+    RegCloseKey(key);
+}
+
 RECT VisibleWindowRect(HWND window) {
     RECT rect{};
     if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
@@ -149,6 +227,53 @@ RECT VisibleWindowRect(HWND window) {
         GetWindowRect(window, &rect);
     }
     return rect;
+}
+
+std::wstring WindowExecutableName(HWND window) {
+    DWORD processId{};
+    GetWindowThreadProcessId(window, &processId);
+    if (!processId) return {};
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) return {};
+    std::array<wchar_t, 32768> path{};
+    DWORD length = static_cast<DWORD>(path.size());
+    const bool success = QueryFullProcessImageNameW(process, 0, path.data(), &length) != FALSE;
+    CloseHandle(process);
+    return success ? Lowercase(std::filesystem::path(std::wstring(path.data(), length)).filename().wstring())
+                   : std::wstring{};
+}
+
+bool IsWindowExcluded(HWND window) {
+    const std::wstring executable = WindowExecutableName(window);
+    return !executable.empty() && g_excludedApps.contains(executable);
+}
+
+bool IsFullscreenWindow(HWND window) {
+    if (!window || window == GetShellWindow() || !IsWindowVisible(window) || IsIconic(window)) {
+        return false;
+    }
+    RECT rect = VisibleWindowRect(window);
+    MONITORINFO monitor{sizeof(monitor)};
+    if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        return false;
+    }
+    constexpr LONG tolerance = 2;
+    return rect.left <= monitor.rcMonitor.left + tolerance &&
+           rect.top <= monitor.rcMonitor.top + tolerance &&
+           rect.right >= monitor.rcMonitor.right - tolerance &&
+           rect.bottom >= monitor.rcMonitor.bottom - tolerance;
+}
+
+bool ShouldSuspendForForeground() {
+    static HWND cachedWindow{};
+    static bool cachedExcluded{};
+    HWND foreground = GetForegroundWindow();
+    if (foreground != cachedWindow) {
+        cachedWindow = foreground;
+        cachedExcluded = IsWindowExcluded(foreground);
+    }
+    return g_paused || cachedExcluded ||
+           (g_pauseInFullscreen && IsFullscreenWindow(foreground));
 }
 
 RECT ZoneRectInArea(int zone, const RECT& area) {
@@ -209,14 +334,30 @@ void CycleLayout(int direction) {
     if (g_layouts.empty()) return;
     const auto count = static_cast<int>(g_layouts.size());
     g_layoutIndex = static_cast<size_t>((static_cast<int>(g_layoutIndex) + direction + count) % count);
+    if (!g_currentMonitorKey.empty()) {
+        g_monitorLayouts[g_currentMonitorKey] = CurrentLayout().name;
+        WritePrivateProfileStringW(L"MonitorLayouts", g_currentMonitorKey.c_str(),
+                                   CurrentLayout().name.c_str(), LayoutFilePath().c_str());
+    }
     g_selectedZones = 0;
     ShowOverlay(g_cursor);
 }
 
 void SelectMonitor(POINT point) {
-    MONITORINFO info{sizeof(info)};
+    MONITORINFOEXW info{sizeof(info)};
     GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &info);
     g_monitorWork = info.rcWork;
+    g_currentMonitorKey = info.szDevice;
+    if (g_currentMonitorKey.starts_with(L"\\\\.\\")) g_currentMonitorKey.erase(0, 4);
+    g_currentMonitorKey = Lowercase(g_currentMonitorKey);
+    const auto saved = g_monitorLayouts.find(g_currentMonitorKey);
+    if (saved != g_monitorLayouts.end()) {
+        const auto layout = std::find_if(g_layouts.begin(), g_layouts.end(),
+            [&](const Layout& candidate) { return _wcsicmp(candidate.name.c_str(), saved->second.c_str()) == 0; });
+        if (layout != g_layouts.end()) {
+            g_layoutIndex = static_cast<size_t>(std::distance(g_layouts.begin(), layout));
+        }
+    }
 }
 
 void ShowOverlay(POINT point) {
@@ -274,6 +415,11 @@ void ShowTrayMenu() {
     GetCursorPos(&cursor);
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
+    AppendMenuW(menu, MF_STRING | (g_paused ? MF_CHECKED : MF_UNCHECKED),
+                kTrayPauseId, L"Pause ZoneSmith");
+    AppendMenuW(menu, MF_STRING | (g_startWithWindows ? MF_CHECKED : MF_UNCHECKED),
+                kTrayStartupId, L"Start with Windows");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayInstructionsId, L"How to use ZoneSmith");
     AppendMenuW(menu, MF_STRING, kTrayLayoutsId, L"Open layouts.ini");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -354,6 +500,11 @@ void CALLBACK MoveSizeEventHook(HWINEVENTHOOK, DWORD event, HWND window,
     if (objectId != OBJID_WINDOW || !window || window == g_overlay) return;
 
     if (event == EVENT_SYSTEM_MOVESIZESTART) {
+        if (ShouldSuspendForForeground() || IsWindowExcluded(window)) {
+            g_dragWindow = nullptr;
+            HideOverlay();
+            return;
+        }
         // This event is emitted only when Windows enters its native top-level
         // move/resize loop (title bar, caption, or non-client sizing handle).
         g_dragWindow = GetAncestor(window, GA_ROOT);
@@ -374,7 +525,8 @@ struct WindowCycleContext {
 BOOL CALLBACK CollectOverlappingWindow(HWND window, LPARAM data) {
     auto& context = *reinterpret_cast<WindowCycleContext*>(data);
     if (window == g_overlay || window == GetShellWindow() || !IsWindowVisible(window) ||
-        IsIconic(window) || (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+        IsIconic(window) || IsWindowExcluded(window) ||
+        (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
         return TRUE;
     }
 
@@ -401,7 +553,7 @@ BOOL CALLBACK CollectOverlappingWindow(HWND window, LPARAM data) {
 
 bool IsCycleWindow(HWND window) {
     return window && window != g_overlay && window != GetShellWindow() &&
-           IsWindowVisible(window) && !IsIconic(window) &&
+           IsWindowVisible(window) && !IsIconic(window) && !IsWindowExcluded(window) &&
            (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0;
 }
 
@@ -449,6 +601,19 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
     if (code == HC_ACTION) {
         const auto* event = reinterpret_cast<MSLLHOOKSTRUCT*>(data);
         g_cursor = event->pt;
+
+        const bool suspensionRelevant = g_overlayVisible || g_windowCycleActive ||
+            message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN ||
+            message == WM_MOUSEWHEEL;
+        if (g_paused || (suspensionRelevant && ShouldSuspendForForeground())) {
+            HideOverlay();
+            g_dragWindow = nullptr;
+            g_cycleWindows.clear();
+            g_cycleIndex = -1;
+            g_windowCycleActive = false;
+            if (message == WM_LBUTTONUP) g_leftDown = false;
+            return CallNextHookEx(g_mouseHook, code, message, data);
+        }
 
         if (message == WM_MOUSEWHEEL && !g_leftDown &&
             (g_leftWindowsDown || g_rightWindowsDown)) {
@@ -523,6 +688,12 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
         const auto* event = reinterpret_cast<KBDLLHOOKSTRUCT*>(data);
         const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+        int zoneNumber = -1;
+        if (event->vkCode >= '1' && event->vkCode <= '9') {
+            zoneNumber = static_cast<int>(event->vkCode - '1');
+        } else if (event->vkCode >= VK_NUMPAD1 && event->vkCode <= VK_NUMPAD9) {
+            zoneNumber = static_cast<int>(event->vkCode - VK_NUMPAD1);
+        }
         if (event->vkCode == VK_LWIN) {
             if (keyDown) g_leftWindowsDown = true;
             if (keyUp) g_leftWindowsDown = false;
@@ -545,13 +716,16 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
             inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
         }
-        int zoneNumber = -1;
-        if (event->vkCode >= '1' && event->vkCode <= '9') {
-            zoneNumber = static_cast<int>(event->vkCode - '1');
-        } else if (event->vkCode >= VK_NUMPAD1 && event->vkCode <= VK_NUMPAD9) {
-            zoneNumber = static_cast<int>(event->vkCode - VK_NUMPAD1);
+        const bool suspensionRelevant = g_overlayVisible || g_windowCycleActive ||
+            event->vkCode == VK_LWIN || event->vkCode == VK_RWIN ||
+            event->vkCode == VK_OEM_3 || event->vkCode == VK_ESCAPE || zoneNumber >= 0;
+        if (g_paused || (suspensionRelevant && ShouldSuspendForForeground())) {
+            HideOverlay();
+            g_cycleWindows.clear();
+            g_cycleIndex = -1;
+            g_windowCycleActive = false;
+            return CallNextHookEx(g_keyboardHook, code, message, data);
         }
-
         if (zoneNumber >= 0) {
             if (keyUp && g_numberKeyDown[zoneNumber]) {
                 g_numberKeyDown[zoneNumber] = false;
@@ -699,6 +873,22 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
         }
+        if (LOWORD(wParam) == kTrayPauseId) {
+            g_paused = !g_paused;
+            HideOverlay();
+            g_cycleWindows.clear();
+            g_cycleIndex = -1;
+            g_windowCycleActive = false;
+            return 0;
+        }
+        if (LOWORD(wParam) == kTrayStartupId) {
+            g_startWithWindows = !g_startWithWindows;
+            WritePrivateProfileStringW(L"Settings", L"startWithWindows",
+                                       g_startWithWindows ? L"true" : L"false",
+                                       LayoutFilePath().c_str());
+            ApplyStartupSetting();
+            return 0;
+        }
         if (LOWORD(wParam) == kTrayExitId) {
             PostQuitMessage(0);
             return 0;
@@ -732,6 +922,7 @@ std::wstring StartupMessage() {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     g_instance = instance;
     LoadLayouts();
+    ApplyStartupSetting();
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.hInstance = instance;
