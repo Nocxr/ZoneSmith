@@ -83,7 +83,9 @@ the combined area, and wheel selection adds or removes both zones together.
 
 Outside a drag, hold the Windows key and use the normal vertical wheel anywhere
 over a window. Every wheel step brings the next visible overlapping top-level
-window to the front and activates it. Release the Windows key to end the cycle.
+window to the front and activates it. Move the pointer over a different window
+while still holding Windows; the next wheel step starts cycling that window's
+overlap group. Release the Windows key to end the cycle.
 
 ## Build
 

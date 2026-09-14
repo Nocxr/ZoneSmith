@@ -77,6 +77,7 @@ std::array<bool, kMaxZones> g_numberKeyDown{};
 std::vector<HWND> g_cycleWindows;
 int g_cycleIndex{-1};
 bool g_windowCycleActive{};
+bool g_windowCycleNeedsRetarget{};
 bool g_leftWindowsDown{};
 bool g_rightWindowsDown{};
 int g_windowOverlapPercent{25};
@@ -588,6 +589,7 @@ void AdvanceWindowPreview(HWND source, int direction) {
     g_cycleWindows.clear();
     g_cycleIndex = -1;
     g_windowCycleActive = false;
+    g_windowCycleNeedsRetarget = false;
 }
 
 void CommitWindowPreview() {
@@ -595,12 +597,18 @@ void CommitWindowPreview() {
     g_cycleWindows.clear();
     g_cycleIndex = -1;
     g_windowCycleActive = false;
+    g_windowCycleNeedsRetarget = false;
 }
 
 LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
     if (code == HC_ACTION) {
         const auto* event = reinterpret_cast<MSLLHOOKSTRUCT*>(data);
         g_cursor = event->pt;
+
+        if (message == WM_MOUSEMOVE && g_windowCycleActive &&
+            (g_leftWindowsDown || g_rightWindowsDown)) {
+            g_windowCycleNeedsRetarget = true;
+        }
 
         const bool suspensionRelevant = g_overlayVisible || g_windowCycleActive ||
             message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN ||
@@ -611,6 +619,7 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
             g_cycleWindows.clear();
             g_cycleIndex = -1;
             g_windowCycleActive = false;
+            g_windowCycleNeedsRetarget = false;
             if (message == WM_LBUTTONUP) g_leftDown = false;
             return CallNextHookEx(g_mouseHook, code, message, data);
         }
@@ -618,6 +627,12 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
         if (message == WM_MOUSEWHEEL && !g_leftDown &&
             (g_leftWindowsDown || g_rightWindowsDown)) {
             HWND source = GetAncestor(WindowFromPoint(event->pt), GA_ROOT);
+            if (g_windowCycleNeedsRetarget) {
+                g_cycleWindows.clear();
+                g_cycleIndex = -1;
+                g_windowCycleActive = false;
+                g_windowCycleNeedsRetarget = false;
+            }
             if (source || g_windowCycleActive) {
                 const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
                 AdvanceWindowPreview(source, wheelDelta > 0 ? 1 : -1);
@@ -724,6 +739,7 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
             g_cycleWindows.clear();
             g_cycleIndex = -1;
             g_windowCycleActive = false;
+            g_windowCycleNeedsRetarget = false;
             return CallNextHookEx(g_keyboardHook, code, message, data);
         }
         if (zoneNumber >= 0) {
@@ -879,6 +895,7 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             g_cycleWindows.clear();
             g_cycleIndex = -1;
             g_windowCycleActive = false;
+            g_windowCycleNeedsRetarget = false;
             return 0;
         }
         if (LOWORD(wParam) == kTrayStartupId) {
