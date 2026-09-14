@@ -80,6 +80,7 @@ bool g_windowCycleActive{};
 bool g_windowCycleNeedsRetarget{};
 bool g_leftWindowsDown{};
 bool g_rightWindowsDown{};
+bool g_windowsWheelUsed{};
 int g_windowOverlapPercent{25};
 int g_snapPadding{};
 bool g_pauseInFullscreen{true};
@@ -626,6 +627,7 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
 
         if (message == WM_MOUSEWHEEL && !g_leftDown &&
             (g_leftWindowsDown || g_rightWindowsDown)) {
+            g_windowsWheelUsed = true;
             HWND source = GetAncestor(WindowFromPoint(event->pt), GA_ROOT);
             if (g_windowCycleNeedsRetarget) {
                 g_cycleWindows.clear();
@@ -710,15 +712,21 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
             zoneNumber = static_cast<int>(event->vkCode - VK_NUMPAD1);
         }
         if (event->vkCode == VK_LWIN) {
-            if (keyDown) g_leftWindowsDown = true;
+            if (keyDown) {
+                if (!g_leftWindowsDown && !g_rightWindowsDown) g_windowsWheelUsed = false;
+                g_leftWindowsDown = true;
+            }
             if (keyUp) g_leftWindowsDown = false;
         } else if (event->vkCode == VK_RWIN) {
-            if (keyDown) g_rightWindowsDown = true;
+            if (keyDown) {
+                if (!g_leftWindowsDown && !g_rightWindowsDown) g_windowsWheelUsed = false;
+                g_rightWindowsDown = true;
+            }
             if (keyUp) g_rightWindowsDown = false;
         }
         if (keyUp && (event->vkCode == VK_LWIN || event->vkCode == VK_RWIN) &&
-            !g_leftWindowsDown && !g_rightWindowsDown && g_windowCycleActive) {
-            CommitWindowPreview();
+            !g_leftWindowsDown && !g_rightWindowsDown && g_windowsWheelUsed) {
+            if (g_windowCycleActive) CommitWindowPreview();
 
             // The Windows-key press was delivered to the shell, so its release
             // must also be delivered. A harmless Ctrl tap marks it as a chord
@@ -730,6 +738,7 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
             inputs[1].ki.wVk = VK_CONTROL;
             inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+            g_windowsWheelUsed = false;
         }
         const bool suspensionRelevant = g_overlayVisible || g_windowCycleActive ||
             event->vkCode == VK_LWIN || event->vkCode == VK_RWIN ||
