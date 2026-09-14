@@ -656,8 +656,8 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
                     InvalidateRect(g_overlay, nullptr, TRUE);
                 }
             }
-        } else if (message == WM_MOUSEWHEEL && g_leftDown && g_dragWindow &&
-                   g_overlayVisible) {
+        } else if ((message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) &&
+                   g_leftDown && g_dragWindow && g_overlayVisible) {
             const SHORT wheelDelta = static_cast<SHORT>(HIWORD(event->mouseData));
             CycleLayout(wheelDelta > 0 ? 1 : -1);
             return 1;
