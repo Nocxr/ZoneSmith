@@ -21,4 +21,4 @@ Windows installation creates a managed command in %LOCALAPPDATA%/CxxTools/bin an
 
 Use the root Makefile and scripts as the standard for new C/C++ projects. Repository AGENTS.md preserves this command format for future work. The connector cannot change global Codex instructions on a local computer.
 
-Validation: Makefile parsing/help, command dry runs, helper script syntax and ordering checks. No actual builds, launches, PATH writes or GitHub Actions were executed as part of this change. Validate platform builds with the available compiler and dependencies.
+Validation: Release builds of the standalone app and its core library succeeded with GCC 15.2 on Windows. Dashboard's two plugin adapters also compiled and linked against the extracted cores and existing module ABI. Existing ZoneSmith aggregate-initializer warnings remain. No applications were launched or PATH entries changed.

@@ -20,3 +20,7 @@ For existing and new C/C++ projects, use the shared GNU Make command format. CMa
 
 For new C/C++ projects, use this repository's root Makefile and scripts as the starting point. Set the project/executable names and supported platforms instead of copying stale project settings.
 <!-- END CXX MAKE STANDARD -->
+
+## Repository ownership
+
+ZoneSmithCore owns hooks, layouts, overlay, snapping and window cycling. It must stay independent of Dashboard and ImGui. Dashboard consumes ZoneSmith::Core from a pinned submodule and keeps the settings/plugin adapter.

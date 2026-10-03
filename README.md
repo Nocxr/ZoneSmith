@@ -1,107 +1,13 @@
 # ZoneSmith
 
-A native Win32 C++ proof of concept inspired by FancyZones.
+Windows snapping, zone overlays and window cycling, using the current core extracted from Dashboard.
 
-## Controls
+The standalone executable is a tray app. Its menu provides pause, layout editing/reload, start-with-Windows and exit. Core behavior and the persistent layouts/state directory come from Dashboard's current implementation; the extraction does not rewrite user settings.
 
-1. Start dragging a normal top-level window with the left mouse button.
-2. While still holding the left button, right-click once to enter **Zone Mode** and
-   show the zone overlay.
-   Right-click again before releasing to cancel and hide it.
-3. Move over zone 1, 2, or 3 and release the left button to snap.
-4. Middle-click a zone to toggle it in or out of the selection. Releasing stretches
-   from the selected zones through the zone under the pointer. For example, select
-   zone 1 and release on zone 3 to span zones 1–3.
-5. Scroll vertically or horizontally while Zone Mode is visible to cycle through layouts.
-6. Press `1` through `9` on the number row or numpad to snap immediately to that
-   numbered zone.
-7. Drag that window again to restore its size from before the snap.
-8. During a window drag, press the backtick key (`` ` ``) to toggle between the
-   full-monitor overlay and a compact monitor map near the pointer.
-9. Press `Ctrl+Alt+Q` to quit ZoneSmith. Press `Esc` to dismiss Zone Mode.
+Build with `make`, launch with `make run`, and register the `zonesmith` command with `make install`. See [BUILDING.md](BUILDING.md) for the shared commands.
 
-ZoneSmith also stays accessible from its notification-area icon. Right-click the
-icon for usage instructions, to open `layouts.ini`, or to exit the app.
+## Dashboard integration
 
-The three zones use the current monitor's working area, so the taskbar is not covered.
+`ZoneSmithCore` / `ZoneSmith::Core` owns the hooks, layout configuration, overlays, snapping and window cycling. It has no Dashboard or ImGui dependency. Dashboard pins this repo as `third_party/zonesmith`, links the core into its ZoneSmith module DLL, and owns the settings/plugin adapter. Set `ZONESMITH_BUILD_STANDALONE=OFF` when embedding.
 
-## Layout configuration
-
-Edit `layouts.ini` beside `ZoneSmith.exe` and restart the app. Each section is a
-layout, and each `zoneN` value is `left,top,right,bottom` in percentages of the
-monitor working area. Layouts may contain up to nine zones.
-
-```ini
-[Two Columns]
-zone1=0,0,50,100
-zone2=50,0,100,100
-```
-
-The included file provides Three Columns, Main and Stack, Two Columns, and Grid
-2x2 layouts, plus 25/50/25, Quarters 4x2, and Thirds 3x2. CMake copies it into
-the build folder automatically.
-
-Global behavior is configured in the same file:
-
-```ini
-[Settings]
-windowOverlapPercent=25
-padding=0
-pauseInFullscreen=true
-startWithWindows=false
-```
-
-`windowOverlapPercent` controls how much of a candidate window must be covered by
-the starting window before Win+wheel includes it. `padding` is a pixel inset on
-every side of the final snapped window. Restart ZoneSmith after changing either.
-
-ZoneSmith automatically suspends its hooks while a fullscreen or borderless-
-fullscreen foreground window is active when `pauseInFullscreen=true`.
-
-Exclude specific programs by executable filename:
-
-```ini
-[ExcludedApps]
-game.exe=1
-another-game.exe=1
-```
-
-Each monitor remembers its own active layout when you scroll in Zone Mode. The choices
-are written automatically using Windows display names:
-
-```ini
-[MonitorLayouts]
-display1=Three Columns
-display2=Grid 2x2
-```
-
-The tray menu can pause all ZoneSmith behavior immediately and toggle Start with
-Windows. Changing the startup option there also updates `layouts.ini`.
-
-Hovering near a shared zone border highlights both zones. Releasing there spans
-the combined area, and middle-click selection toggles both zones together.
-After selecting a zone, zones inside the live span between the selection and the
-current pointer target appear yellow.
-
-Outside a drag, hold the Windows key and use the normal vertical wheel anywhere
-over a window. Every wheel step brings the next visible overlapping top-level
-window to the front and activates it. Move the pointer over a different window
-while still holding Windows; the next wheel step starts cycling that window's
-overlap group. Release the Windows key to end the cycle.
-
-## Build
-
-From a Visual Studio Developer PowerShell:
-
-```powershell
-cmake -S . -B build -G Ninja
-cmake --build build --config Release
-```
-
-Or run `make` if GNU Make is available. The executable is `build/ZoneSmith.exe`.
-
-## POC limitations
-
-- The layout is fixed to three equal columns.
-- Elevated windows cannot be controlled unless ZoneSmith is also run elevated.
-- The app uses a startup dialog and a global `Ctrl+Alt+Q` exit hotkey instead of a tray UI.
+Use either Dashboard's enabled module or the standalone app as the active hook host to avoid two sets of hooks responding to the same action. Existing user layouts and state are preserved by the current persistent-data implementation.
