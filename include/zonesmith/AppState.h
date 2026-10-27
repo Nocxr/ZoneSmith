@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <array>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -28,6 +29,17 @@ constexpr UINT kTrayExitId = 1005;
 constexpr DWORD kHorizontalCycleTimeoutMs = 700;
 constexpr int kHorizontalCycleMoveTolerance = 12;
 
+struct DynamicNode {
+    HWND window{};
+    int first{-1};
+    int second{-1};
+    bool vertical{true};
+    double ratio{0.5};
+};
+struct DynamicTree {
+    std::vector<DynamicNode> nodes;
+    int root{-1};
+};
 struct AppState {
     HINSTANCE instance{};
 
@@ -38,6 +50,12 @@ struct AppState {
     HWINEVENTHOOK moveSizeHook{};
 
     HWND dragWindow{};
+    HWND pendingDynamicWindow{};
+    POINT pendingDynamicPoint{};
+    std::unordered_map<std::wstring, DynamicTree> dynamicTrees;
+    std::wstring dynamicDividerMonitor;
+    int dynamicDividerNode{-1};
+    RECT dynamicDividerBounds{};
 
     POINT cursor{};
 
