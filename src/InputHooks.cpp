@@ -1,6 +1,7 @@
 #include "InputHooks.h"
 
 #include "Overlay.h"
+#include "Dynamic.h"
 #include "Snap.h"
 #include "WindowCycle.h"
 #include "WindowUtils.h"
