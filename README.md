@@ -11,3 +11,24 @@ Build with `make`, launch with `make run`, and register the `zonesmith` command 
 `ZoneSmithCore` / `ZoneSmith::Core` owns the hooks, layout configuration, overlays, snapping and window cycling. It has no Dashboard or ImGui dependency. Dashboard pins this repo as `third_party/zonesmith`, links the core into its ZoneSmith module DLL, and owns the settings/plugin adapter. Set `ZONESMITH_BUILD_STANDALONE=OFF` when embedding.
 
 Use either Dashboard's enabled module or the standalone app as the active hook host to avoid two sets of hooks responding to the same action. Existing user layouts and state are preserved by the current persistent-data implementation.
+
+## Dynamic tiling POC (feature branch)
+
+`Dynamic` is a built-in layout at the end of the normal wheel-cycled layout list.
+Select it by dragging a window, opening ZoneSmith's overlay with right-click while dragging,
+and scrolling the wheel until `Dynamic` appears. Selection remains per monitor; existing
+static INI layouts remain available.
+
+With Dynamic active, drop the first window to fill the monitor's work area.
+Subsequent drops split the occupied tile under the pointer, choosing left/right
+or top/bottom based on the pointer's nearest edge. Existing windows in that tile
+shrink automatically. A dropped window must be explicitly docked; ZoneSmith
+does not automatically tile unrelated windows.
+
+To adjust a split, **hold Ctrl+Alt and left-drag the shared boundary** between
+two tiled windows (within 12 pixels of the split); release to keep the ratio.
+The POC uses the boundary as the slider, rather than placing permanent handles
+on top of applications. Divider ratios persist while the app runs, but window
+membership and split ratios are not yet saved across ZoneSmith restarts.
+Closed windows are pruned when the next window is docked. Static layouts
+and their persistence are unaffected.
