@@ -2,6 +2,7 @@
 #include "WindowUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
 namespace {
 using Tree = DynamicTree;
@@ -25,8 +26,8 @@ void Reflow(const Tree& tree, int index, RECT bounds, int padding) {
         Reflow(tree,n.second,b,padding);
     } else if (n.window && IsWindow(n.window)) {
         RECT target = bounds;
-        InflateRect(&target,-std::min(padding,(bounds.right-bounds.left-1)/2),
-                              -std::min(padding,(bounds.bottom-bounds.top-1)/2));
+        InflateRect(&target,-std::min(padding,static_cast<int>((bounds.right-bounds.left-1)/2)),
+                              -std::min(padding,static_cast<int>((bounds.bottom-bounds.top-1)/2)));
         if (IsZoomed(n.window)) ShowWindow(n.window,SW_RESTORE);
         SetWindowPos(n.window,nullptr,target.left,target.top,
             std::max(1L,target.right-target.left),std::max(1L,target.bottom-target.top),
