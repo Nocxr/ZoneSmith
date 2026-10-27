@@ -13,6 +13,7 @@ add_library(ZoneSmithCore STATIC
     src/App.cpp
     src/WindowUtils.cpp
     src/Snap.cpp
+    src/Dynamic.cpp
     src/WindowCycle.cpp
     src/InputHooks.cpp
 )
