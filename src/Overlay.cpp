@@ -1,6 +1,7 @@
 #include "Overlay.h"
 
 #include "Config.h"
+#include "Dynamic.h"
 
 #include <algorithm>
 #include <climits>
