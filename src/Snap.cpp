@@ -1,10 +1,12 @@
 #include "Snap.h"
 
 #include "Overlay.h"
+#include "Dynamic.h"
 #include "WindowUtils.h"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 void QueueSnap(
     AppState& app
