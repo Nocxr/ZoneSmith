@@ -103,10 +103,8 @@ LRESULT CALLBACK MouseHook(
         )
     ) {
         HideOverlay(app);
-
-        app.dragWindow =
-            nullptr;
-
+        EndDynamicDividerDrag(app);
+        app.dragWindow=nullptr;
         ResetWindowCycle(app);
 
         if (
@@ -297,6 +295,25 @@ LRESULT CALLBACK MouseHook(
 
     //
     // ------------------------------------------------------------
+    // Dynamic resize: Ctrl+Alt+left-drag an existing divider.
+    // Consume both mouse buttons events to avoid clicking the underlying app.
+    if(app.dynamicDividerNode>=0) {
+        if(message==WM_MOUSEMOVE) {
+            MoveDynamicDividerDrag(app,event->pt);
+            return 1;
+        }
+        if(message==WM_LBUTTONUP) {
+            EndDynamicDividerDrag(app);
+            app.leftDown=false;
+            return 1;
+        }
+    }
+    if(message==WM_LBUTTONDOWN &&
+       (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+       (GetAsyncKeyState(VK_MENU)&0x8000) &&
+       StartDynamicDividerDrag(app,event->pt)) {
+        return 1;
+    }
     // Normal drag / zone behavior
     // ------------------------------------------------------------
     //
