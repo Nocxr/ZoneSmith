@@ -568,6 +568,9 @@ void LoadLayouts(AppState& app) {
     if (app.layouts.empty()) {
         AddFallbackLayouts(app);
     }
+    app.layouts.erase(std::remove_if(app.layouts.begin(),app.layouts.end(),
+        [](const Layout& l){return l.name==L"Dynamic";}),app.layouts.end());
+    app.layouts.push_back(Layout{L"Dynamic",{{0,0,100,100}}});
 
     if (
         app.layoutIndex >=
