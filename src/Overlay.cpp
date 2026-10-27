@@ -173,6 +173,10 @@ unsigned int ZonesAt(
     const AppState& app,
     POINT point
 ) {
+    if(IsDynamicLayout(app)) {
+        RECT work=app.monitorWork;
+        return PtInRect(&work,point) ? 1u : 0u;
+    }
     const RECT& selectionArea =
         app.compactMode
             ? app.overlayBounds
@@ -235,6 +239,7 @@ RECT ZonesRect(
     const AppState& app,
     unsigned int zones
 ) {
+    if(IsDynamicLayout(app)) return DynamicPreview(app,app.cursor);
     RECT result{
         LONG_MAX,
         LONG_MAX,
@@ -657,6 +662,16 @@ void PaintOverlay(
             ) - 6
         };
 
+        if(IsDynamicLayout(app)) {
+            RECT screen=DynamicPreview(app,app.cursor);
+            const RECT work=app.monitorWork;
+            const double sx=width/std::max(1L,work.right-work.left);
+            const double sy=height/std::max(1L,work.bottom-work.top);
+            rect={static_cast<LONG>((screen.left-work.left)*sx)+6,
+                  static_cast<LONG>((screen.top-work.top)*sy)+6,
+                  static_cast<LONG>((screen.right-work.left)*sx)-6,
+                  static_cast<LONG>((screen.bottom-work.top)*sy)-6};
+        }
         const COLORREF fillColor =
             selected
                 ? (
