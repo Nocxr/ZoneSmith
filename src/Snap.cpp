@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <utility>
 
 void QueueSnap(
     AppState& app
@@ -51,6 +52,15 @@ void QueueSnap(
         );
     }
 
+    if (IsDynamicLayout(app)) {
+        app.pendingDynamicWindow=app.dragWindow;
+        app.pendingDynamicPoint=app.cursor;
+        app.pendingSnap={};
+        app.pendingRestore={};
+        app.restoreOnReleaseWindow=nullptr;
+        SetTimer(app.overlay,kSnapTimerId,75,nullptr);
+        return;
+    }
     const unsigned int zones =
         app.selectedZones != 0
             ? (
@@ -124,10 +134,12 @@ void QueueRestoreAfterMove(
 void ApplyPendingOperation(
     AppState& app
 ) {
-    KillTimer(
-        app.overlay,
-        kSnapTimerId
-    );
+    KillTimer(app.overlay,kSnapTimerId);
+    if(app.pendingDynamicWindow) {
+        HWND window=std::exchange(app.pendingDynamicWindow,nullptr);
+        DockDynamicWindow(app,window,app.pendingDynamicPoint);
+        return;
+    }
 
     if (
         app.pendingSnap.window &&
