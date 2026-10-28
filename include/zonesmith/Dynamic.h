@@ -18,3 +18,5 @@ void DestroyDynamicDividerGuides(AppState& app);
 
 // Immediately release destroyed windows and reclaim their tiles.
 void ReleaseDestroyedDynamicWindow(AppState& app, HWND window);
+
+void ReconcileDynamicWindows(AppState& app);
