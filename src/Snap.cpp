@@ -1,14 +1,49 @@
 #include "Snap.h"
 
 #include "Overlay.h"
+#include "Dynamic.h"
 #include "WindowUtils.h"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 void QueueSnap(
     AppState& app
 ) {
+    //
+    // Dynamic layouts commit the previewed drop plan. Checked before the
+    // zone guard so a tiled window released off the work area returns to
+    // its tile instead of floating.
+    //
+    if (
+        app.dragWindow &&
+        IsWindow(app.dragWindow) &&
+        IsDynamicLayout(app)
+    ) {
+        if (
+            !app.savedWindows.contains(app.dragWindow) &&
+            !IsDynamicTiled(app, app.dragWindow)
+        ) {
+            WINDOWPLACEMENT current{};
+            current.length = sizeof(current);
+            GetWindowPlacement(app.dragWindow, &current);
+            app.savedWindows.emplace(
+                app.dragWindow,
+                SavedWindow{
+                    VisibleWindowRect(app.dragWindow),
+                    current.showCmd == SW_SHOWMAXIMIZED
+                }
+            );
+        }
+
+        app.pendingSnap = {};
+        app.pendingRestore = {};
+        app.restoreOnReleaseWindow = nullptr;
+        QueueDynamicDrop(app);
+        return;
+    }
+
     if (
         !app.dragWindow ||
         !IsWindow(app.dragWindow) ||
@@ -122,10 +157,10 @@ void QueueRestoreAfterMove(
 void ApplyPendingOperation(
     AppState& app
 ) {
-    KillTimer(
-        app.overlay,
-        kSnapTimerId
-    );
+    KillTimer(app.overlay,kSnapTimerId);
+    if (ApplyPendingDynamicOperation(app)) {
+        return;
+    }
 
     if (
         app.pendingSnap.window &&

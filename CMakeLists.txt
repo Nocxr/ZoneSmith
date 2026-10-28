@@ -13,6 +13,8 @@ add_library(ZoneSmithCore STATIC
     src/App.cpp
     src/WindowUtils.cpp
     src/Snap.cpp
+    src/DynamicLayout.cpp
+    src/Dynamic.cpp
     src/WindowCycle.cpp
     src/InputHooks.cpp
 )
@@ -25,6 +27,15 @@ if(MSVC)
     target_compile_options(ZoneSmithCore PRIVATE /W4 /permissive- /utf-8)
 else()
     target_compile_options(ZoneSmithCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+option(ZONESMITH_BUILD_TESTS "Build ZoneSmith unit tests" ${PROJECT_IS_TOP_LEVEL})
+if(ZONESMITH_BUILD_TESTS)
+    enable_testing()
+    # The layout model is pure C++, so the tests do not link the Win32 core.
+    add_executable(ZoneSmithDynamicLayoutTests tests/DynamicLayoutTests.cpp src/DynamicLayout.cpp)
+    target_compile_features(ZoneSmithDynamicLayoutTests PRIVATE cxx_std_20)
+    target_include_directories(ZoneSmithDynamicLayoutTests PRIVATE include/zonesmith)
+    add_test(NAME DynamicLayout COMMAND ZoneSmithDynamicLayoutTests)
 endif()
 if(ZONESMITH_BUILD_STANDALONE)
     add_executable(ZoneSmith WIN32 src/main.cpp)

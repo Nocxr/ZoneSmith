@@ -260,12 +260,13 @@ bool IsPointOnWindowTitleBar(
             return true;
         }
 
-        if (
-            hit == HTCLOSE ||
-            hit == HTMINBUTTON ||
-            hit == HTMAXBUTTON ||
-            hit == HTSYSMENU
-        ) {
+        //
+        // Only a client-area answer falls back to the geometric title-bar
+        // band (apps that draw their own caption). Resize borders such as
+        // HTTOP/HTTOPLEFT, caption buttons and the system menu are never a
+        // title-bar drag.
+        //
+        if (hit != HTCLIENT) {
             return false;
         }
     }

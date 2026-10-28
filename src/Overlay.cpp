@@ -1,6 +1,7 @@
 #include "Overlay.h"
 
 #include "Config.h"
+#include "Dynamic.h"
 
 #include <algorithm>
 #include <climits>
@@ -172,6 +173,10 @@ unsigned int ZonesAt(
     const AppState& app,
     POINT point
 ) {
+    if (IsDynamicLayout(app)) {
+        // Dynamic has one logical zone; the drop itself is planned in Dynamic.cpp.
+        return PtInRect(&app.monitorWork, point) ? 1u : 0u;
+    }
     const RECT& selectionArea =
         app.compactMode
             ? app.overlayBounds
@@ -234,6 +239,7 @@ RECT ZonesRect(
     const AppState& app,
     unsigned int zones
 ) {
+    if (IsDynamicLayout(app)) return app.monitorWork;
     RECT result{
         LONG_MAX,
         LONG_MAX,
@@ -506,13 +512,38 @@ void PaintOverlay(
 ) {
     PAINTSTRUCT paint{};
 
-    HDC dc =
+    HDC screen =
         BeginPaint(
             window,
             &paint
         );
 
     RECT client{};
+
+    GetClientRect(
+        window,
+        &client
+    );
+
+    //
+    // Compose the whole frame off-screen and copy it in one step. Drawing
+    // the monitor-sized overlay piecemeal flickers while a drag repaints it.
+    //
+    HDC dc =
+        CreateCompatibleDC(screen);
+
+    HBITMAP frame =
+        CreateCompatibleBitmap(
+            screen,
+            std::max(1L, client.right),
+            std::max(1L, client.bottom)
+        );
+
+    HGDIOBJ oldFrame =
+        SelectObject(
+            dc,
+            frame
+        );
 
     GetClientRect(
         window,
@@ -588,6 +619,9 @@ void PaintOverlay(
     const double height =
         client.bottom;
 
+    if (IsDynamicLayout(app)) {
+        PaintDynamicOverlay(app, dc, client);
+    } else
     for (
         int zone = 0;
         zone <
@@ -854,6 +888,26 @@ void PaintOverlay(
     );
 
     DeleteObject(font);
+
+    BitBlt(
+        screen,
+        0,
+        0,
+        client.right,
+        client.bottom,
+        dc,
+        0,
+        0,
+        SRCCOPY
+    );
+
+    SelectObject(
+        dc,
+        oldFrame
+    );
+
+    DeleteObject(frame);
+    DeleteDC(dc);
 
     EndPaint(
         window,

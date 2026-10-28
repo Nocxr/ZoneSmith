@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "InputHooks.h"
+#include "Dynamic.h"
 #include "Overlay.h"
 #include "OverlayWindow.h"
 #include "WindowCycle.h"
@@ -137,6 +138,17 @@ bool InitializeZoneSmith(
         return false;
     }
 
+    //
+    // Minimize/restore/close events reconcile Dynamic layouts promptly; the
+    // timer is a backstop for anything the events miss.
+    //
+    if (
+        !InstallDynamicWindowHooks(app) ||
+        !SetTimer(app.overlay,kDynamicReconcileTimerId,500,nullptr)
+    ) {
+        ShutdownZoneSmith(app);
+        return false;
+    }
     return true;
 }
 
@@ -147,7 +159,10 @@ void ShutdownZoneSmith(
         app
     );
 
+    if(app.overlay) KillTimer(app.overlay,kDynamicReconcileTimerId);
+    RemoveDynamicWindowHooks(app);
     HideOverlay(app);
+    DestroyDynamicDividerGuides(app);
 
     if (app.moveSizeHook) {
         UnhookWinEvent(

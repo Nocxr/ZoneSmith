@@ -1,6 +1,8 @@
 #include "InputHooks.h"
 
 #include "Overlay.h"
+#include "Dynamic.h"
+#include "Config.h"
 #include "Snap.h"
 #include "WindowCycle.h"
 #include "WindowUtils.h"
@@ -72,6 +74,11 @@ LRESULT CALLBACK MouseHook(
         event->pt;
 
     //
+    if(app.dividerGuideVisible)
+        ShowDynamicDividerGuides(app,
+            (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+            (GetAsyncKeyState(VK_MENU)&0x8000));
+
     // Use Windows' actual current modifier state for mouse
     // behavior. Do not trust the cached keyboard-hook flags.
     //
@@ -102,10 +109,8 @@ LRESULT CALLBACK MouseHook(
         )
     ) {
         HideOverlay(app);
-
-        app.dragWindow =
-            nullptr;
-
+        EndDynamicDividerDrag(app);
+        app.dragWindow=nullptr;
         ResetWindowCycle(app);
 
         if (
@@ -296,6 +301,37 @@ LRESULT CALLBACK MouseHook(
 
     //
     // ------------------------------------------------------------
+    // The low-level mouse hook must NOT swallow mouse movement: doing so
+    // prevents the cursor itself from advancing on some Windows paths.
+    // Never resize other application windows synchronously in this callback.
+    if(app.dynamicDividerNode>=0) {
+        if(message==WM_MOUSEMOVE) {
+            app.dynamicDividerLatest=event->pt;
+            ++app.dynamicDividerMoveCount;
+            if(!app.dynamicDividerMoveQueued) {
+                app.dynamicDividerMoveQueued=true;
+                PostMessageW(app.overlay,kDividerMoveMessage,0,0);
+            }
+            return CallNextHookEx(app.mouseHook,code,message,data);
+        }
+        if(message==WM_LBUTTONUP) {
+            app.dynamicDividerLatest=event->pt;
+            app.leftDown=false;
+            PostMessageW(app.overlay,kDividerEndMessage,0,0);
+            return 1;
+        }
+    }
+    if(message==WM_LBUTTONDOWN &&
+       (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+       (GetAsyncKeyState(VK_MENU)&0x8000)) {
+        if(StartDynamicDividerDrag(app,event->pt)) {
+            ShowDynamicDividerGuides(app,true);
+            app.dragWindow=nullptr;
+            app.leftDown=false;
+            return 1;
+        }
+        ++app.dynamicDividerMissCount;
+    }
     // Normal drag / zone behavior
     // ------------------------------------------------------------
     //
@@ -303,8 +339,10 @@ LRESULT CALLBACK MouseHook(
         message ==
         WM_LBUTTONDOWN
     ) {
-        app.leftDown =
-            true;
+        app.leftDown = true;
+        HWND hit=GetAncestor(WindowFromPoint(event->pt),GA_ROOT);
+        app.dynamicTitleDragCandidate =
+            hit && IsPointOnWindowTitleBar(app,hit,event->pt) ? hit : nullptr;
     }
 
     else if (
@@ -312,6 +350,20 @@ LRESULT CALLBACK MouseHook(
             WM_MOUSEMOVE &&
         app.leftDown
     ) {
+        //
+        // A title-bar move entering a Dynamic monitor shows its preview
+        // automatically, unless right-click dismissed it for this drag.
+        // Windows already in the layout stay put until the drop.
+        //
+        if (
+            app.dragWindow &&
+            app.dynamicDragIsMove &&
+            !app.overlayVisible &&
+            !app.dynamicOverlayDismissed &&
+            IsDynamicMonitorAt(app, event->pt)
+        ) {
+            ShowOverlay(app, event->pt);
+        }
         if (
             app.overlayVisible
         ) {
@@ -343,9 +395,17 @@ LRESULT CALLBACK MouseHook(
                     event->pt
                 );
 
+            //
+            // Repaint only when the drop preview actually changed, not on
+            // every mouse move.
+            //
+            const bool previewChanged =
+                IsDynamicLayout(app) &&
+                UpdateDynamicDragPreview(app, event->pt);
+
             if (
                 zones !=
-                app.hotZones
+                app.hotZones || previewChanged
             ) {
                 app.hotZones =
                     zones;
@@ -382,6 +442,29 @@ LRESULT CALLBACK MouseHook(
                 : -1
         );
 
+        if (IsDynamicLayout(app)) {
+            UpdateDynamicDragPreview(app, event->pt);
+            InvalidateRect(app.overlay, nullptr, TRUE);
+        }
+
+        return 1;
+    }
+
+    else if (
+        message ==
+            WM_MBUTTONDOWN &&
+        app.leftDown &&
+        app.dragWindow &&
+        app.overlayVisible &&
+        IsDynamicLayout(app)
+    ) {
+        //
+        // Dynamic: middle-click steps through the drop options at this
+        // point (tile, enclosing regions, monitor; or swap/stack).
+        //
+        CycleDynamicDropOption(app);
+        InvalidateRect(app.overlay, nullptr, TRUE);
+        app.swallowMiddleUp = true;
         return 1;
     }
 
@@ -439,14 +522,21 @@ LRESULT CALLBACK MouseHook(
             app.overlayVisible
         ) {
             HideOverlay(app);
+            app.dynamicOverlayDismissed = true;
         } else {
             app.selectedZones =
                 0;
+
+            app.dynamicOverlayDismissed = false;
 
             ShowOverlay(
                 app,
                 event->pt
             );
+
+            if (IsDynamicLayout(app)) {
+                UpdateDynamicDragPreview(app, event->pt);
+            }
         }
 
         app.swallowRightUp =
@@ -470,10 +560,29 @@ LRESULT CALLBACK MouseHook(
         message ==
         WM_LBUTTONUP
     ) {
+        const bool dynamicDrop =
+            app.overlayVisible &&
+            app.dynamicDragIsMove &&
+            IsDynamicLayout(app);
+
         if (
             app.overlayVisible
         ) {
             QueueSnap(app);
+        }
+
+        //
+        // A tiled window moved by its title bar and released anywhere other
+        // than a Dynamic preview (overlay dismissed, static monitor) leaves
+        // its layout; the remaining windows reclaim the space.
+        //
+        if (
+            app.dragWindow &&
+            app.dynamicDragIsMove &&
+            !dynamicDrop &&
+            IsDynamicTiled(app, app.dragWindow)
+        ) {
+            QueueDynamicUndock(app, app.dragWindow);
         }
 
         else if (
@@ -489,11 +598,11 @@ LRESULT CALLBACK MouseHook(
 
         HideOverlay(app);
 
-        app.leftDown =
-            false;
-
-        app.dragWindow =
-            nullptr;
+        app.leftDown = false;
+        app.dynamicTitleDragCandidate=nullptr;
+        app.dynamicDragIsMove = false;
+        app.dynamicPreview = {};
+        app.dragWindow = nullptr;
 
         app.restoreOnReleaseWindow =
             nullptr;
@@ -540,7 +649,19 @@ LRESULT CALLBACK KeyboardHook(
         message == WM_KEYUP ||
         message == WM_SYSKEYUP;
 
-    int zoneNumber = -1;
+    const bool ctrlTransition=event->vkCode==VK_CONTROL ||
+        event->vkCode==VK_LCONTROL || event->vkCode==VK_RCONTROL;
+    const bool altTransition=event->vkCode==VK_MENU ||
+        event->vkCode==VK_LMENU || event->vkCode==VK_RMENU;
+    if(ctrlTransition || altTransition) {
+        const bool ctrl=ctrlTransition?keyDown:
+            (GetAsyncKeyState(VK_CONTROL)&0x8000)!=0;
+        const bool alt=altTransition?keyDown:
+            (GetAsyncKeyState(VK_MENU)&0x8000)!=0;
+        ShowDynamicDividerGuides(app,ctrl && alt);
+    }
+
+        int zoneNumber = -1;
 
     if (
         event->vkCode >= '1' &&
@@ -829,6 +950,8 @@ void CALLBACK MoveSizeEventHook(
 
     AppState& app =
         *g_app;
+    if(app.dynamicDividerNode>=0 || app.dynamicDividerApplying)
+        return;
 
     if (
         objectId != OBJID_WINDOW ||
@@ -864,6 +987,12 @@ void CALLBACK MoveSizeEventHook(
                 window,
                 GA_ROOT
             );
+        BeginDynamicDrag(
+            app,
+            app.dragWindow,
+            app.leftDown &&
+                app.dynamicTitleDragCandidate == app.dragWindow
+        );
 
         app.restoreOnReleaseWindow =
             app.savedWindows.contains(
@@ -871,6 +1000,22 @@ void CALLBACK MoveSizeEventHook(
             )
                 ? app.dragWindow
                 : nullptr;
+        // Resizing a border is not a docking gesture.
+        // The original mouse-down must have started on this window's title bar.
+        SelectMonitor(app,app.cursor);
+        if(IsDynamicLayout(app) && !app.dynamicDragIsMove) {
+            app.dragWindow=nullptr;
+            app.restoreOnReleaseWindow=nullptr;
+            HideOverlay(app);
+            return;
+        }
+        // Dynamic mode uses the existing window drag itself as the dock gesture.
+        // Do not require an additional right-click to expose its drop preview.
+        if (IsDynamicLayout(app) && app.dragWindow && app.leftDown) {
+            app.selectedZones = 0;
+            ShowOverlay(app, app.cursor);
+            UpdateDynamicDragPreview(app, app.cursor);
+        }
     }
 
     else if (
@@ -878,9 +1023,10 @@ void CALLBACK MoveSizeEventHook(
             EVENT_SYSTEM_MOVESIZEEND &&
         !app.leftDown
     ) {
-        app.dragWindow =
-            nullptr;
-
+        app.dragWindow = nullptr;
+        app.dynamicTitleDragCandidate=nullptr;
+        app.dynamicDragIsMove = false;
+        app.dynamicPreview = {};
         HideOverlay(app);
     }
 }
