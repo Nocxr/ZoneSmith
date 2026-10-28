@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cwctype>
 #include <cwchar>
+#include <cstdint>
 
 namespace {
 using Tree = DynamicTree;
@@ -206,6 +207,27 @@ RECT DynamicPreview(const AppState& app,POINT cursor) {
     Tree preview=it->second;
     if(app.dragWindow) Remove(preview,preview.root,app.dragWindow);
     return PreviewPlacement(preview,work,cursor);
+}
+std::vector<RECT> DynamicPreviewSlots(const AppState& app,POINT cursor) {
+    const RECT work=WorkForPoint(cursor);
+    Tree preview{};
+    auto it=app.dynamicTrees.find(KeyForPoint(cursor));
+    if(it!=app.dynamicTrees.end()) preview=it->second;
+    if(app.dragWindow) Remove(preview,preview.root,app.dragWindow);
+    if(!ResolvePlacement(preview,work,cursor).valid) return {};
+    const HWND placeholder=reinterpret_cast<HWND>(static_cast<uintptr_t>(1));
+    if(!ApplyPlacement(preview,placeholder,work,cursor)) return {};
+    std::vector<RECT> result;
+    const auto collect=[&](auto&& self,int index,RECT bounds)->void {
+        if(index<0 || index>=static_cast<int>(preview.nodes.size())) return;
+        const auto& node=preview.nodes[index];
+        if(!HasChildren(node)) { result.push_back(bounds); return; }
+        auto [first,second]=Divide(bounds,node);
+        self(self,node.first,first);
+        self(self,node.second,second);
+    };
+    collect(collect,preview.root,work);
+    return result;
 }
 void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     if(!window || !IsWindow(window)) return;
