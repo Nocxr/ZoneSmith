@@ -31,8 +31,10 @@ LRESULT CALLBACK ZoneSmithOverlayProc(
         return 0;
     case kDynamicDividerEndMessage:
         app.dynamicDividerUpdateQueued=false;
-        if(app.dynamicDividerNode>=0)
+        if(app.dynamicDividerNode>=0) {
             MoveDynamicDividerDrag(app,app.dynamicDividerCursor);
+            CommitDynamicDividerDrag(app);
+        }
         EndDynamicDividerDrag(app);
         UpdateDynamicDividerGuides(app,false);
         app.dragWindow=nullptr;
