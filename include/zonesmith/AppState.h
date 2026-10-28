@@ -18,6 +18,7 @@ constexpr int kMaxZones = 9;
 constexpr int kQuitHotkeyId = 1;
 
 constexpr UINT_PTR kSnapTimerId = 1;
+constexpr UINT_PTR kDynamicMaintenanceTimerId = 2;
 
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kDynamicDividerMoveMessage = WM_APP + 10;
