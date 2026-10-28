@@ -62,7 +62,7 @@ Hit FindLeaf(const Tree& tree,int index,RECT bounds,POINT point) {
     auto first=FindLeaf(tree,n.first,a,point);
     return first.index>=0?first:FindLeaf(tree,n.second,b,point);
 }
-struct Edge { int index{-1}; RECT rect{}; int distance{12}; };
+struct Edge { int index{-1}; RECT rect{}; int distance{24}; };
 void FindEdge(const Tree& tree,int index,RECT rect,POINT point,Edge& found) {
     if(index<0) return;
     const auto& n=tree.nodes[index];
