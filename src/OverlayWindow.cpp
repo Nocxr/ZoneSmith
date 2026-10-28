@@ -50,6 +50,10 @@ LRESULT CALLBACK ZoneSmithOverlayProc(
         return HTTRANSPARENT;
 
     case WM_TIMER:
+        if(wParam==kDynamicReconcileTimerId) {
+            ReconcileDynamicWindowStates(app);
+            return 0;
+        }
         if (
             wParam ==
             kSnapTimerId
