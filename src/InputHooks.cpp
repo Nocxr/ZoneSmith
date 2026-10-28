@@ -86,16 +86,17 @@ LRESULT CALLBACK MouseHook(
     // Active divider capture owns the mouse until release, regardless of focus.
     if(app.dynamicDividerNode >= 0) {
         if(message == WM_MOUSEMOVE) {
-            MoveDynamicDividerDrag(app,event->pt);
+            app.dynamicDividerCursor=event->pt;
+            if(!app.dynamicDividerUpdateQueued) {
+                app.dynamicDividerUpdateQueued=true;
+                PostMessageW(app.overlay,kDynamicDividerMoveMessage,0,0);
+            }
             return 1;
         }
         if(message == WM_LBUTTONUP) {
-            EndDynamicDividerDrag(app);
-            UpdateDynamicDividerGuides(app,(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
-                                              (GetAsyncKeyState(VK_MENU)&0x8000));
+            app.dynamicDividerCursor=event->pt;
+            PostMessageW(app.overlay,kDynamicDividerEndMessage,0,0);
             app.leftDown=false;
-            app.dragWindow=nullptr;
-            HideOverlay(app);
             return 1;
         }
         if(message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
