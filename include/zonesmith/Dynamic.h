@@ -11,3 +11,7 @@ void EndDynamicDividerDrag(AppState& app);
 
 // Frees the original tile when a real window move starts (not when it docks).
 bool DetachDynamicWindow(AppState& app, HWND window);
+
+bool IsNearDynamicDivider(const AppState& app, POINT cursor);
+void ShowDynamicDividerGuides(AppState& app, bool enabled);
+void DestroyDynamicDividerGuides(AppState& app);
