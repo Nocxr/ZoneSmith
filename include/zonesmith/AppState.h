@@ -49,6 +49,8 @@ struct AppState {
     HWND overlay{};
     HWND dynamicGuideOverlay{};
     bool dynamicGuidesVisible{};
+    bool dynamicCtrlDown{};
+    bool dynamicAltDown{};
 
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
