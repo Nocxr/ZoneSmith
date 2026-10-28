@@ -81,6 +81,33 @@ LRESULT CALLBACK MouseHook(
         IsWindowsKeyDownNow();
 
     //
+    // Active divider capture owns the mouse until release, regardless of focus.
+    if(app.dynamicDividerNode >= 0) {
+        if(message == WM_MOUSEMOVE) {
+            MoveDynamicDividerDrag(app,event->pt);
+            return 1;
+        }
+        if(message == WM_LBUTTONUP) {
+            EndDynamicDividerDrag(app);
+            app.leftDown=false;
+            app.dragWindow=nullptr;
+            HideOverlay(app);
+            return 1;
+        }
+        if(message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+            return 1;
+    }
+    // Resize modifiers must never accidentally trigger a window drag/snap.
+    if(message == WM_LBUTTONDOWN &&
+       (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+       (GetAsyncKeyState(VK_MENU)&0x8000) &&
+       StartDynamicDividerDrag(app,event->pt)) {
+        app.dragWindow=nullptr;
+        app.leftDown=false;
+        HideOverlay(app);
+        return 1;
+    }
+
     // ------------------------------------------------------------
     // Suspension
     // ------------------------------------------------------------
@@ -295,26 +322,9 @@ LRESULT CALLBACK MouseHook(
     }
 
     //
+    // Divider gestures take precedence over all snapping and cycling.
+    // They must be processed before foreground suspension can terminate them.
     // ------------------------------------------------------------
-    // Dynamic resize: Ctrl+Alt+left-drag an existing divider.
-    // Consume both mouse buttons events to avoid clicking the underlying app.
-    if(app.dynamicDividerNode>=0) {
-        if(message==WM_MOUSEMOVE) {
-            MoveDynamicDividerDrag(app,event->pt);
-            return 1;
-        }
-        if(message==WM_LBUTTONUP) {
-            EndDynamicDividerDrag(app);
-            app.leftDown=false;
-            return 1;
-        }
-    }
-    if(message==WM_LBUTTONDOWN &&
-       (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
-       (GetAsyncKeyState(VK_MENU)&0x8000) &&
-       StartDynamicDividerDrag(app,event->pt)) {
-        return 1;
-    }
     // Normal drag / zone behavior
     // ------------------------------------------------------------
     //
