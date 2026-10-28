@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "InputHooks.h"
+#include "Dynamic.h"
 #include "Overlay.h"
 #include "OverlayWindow.h"
 #include "WindowCycle.h"
@@ -137,6 +138,13 @@ bool InitializeZoneSmith(
         return false;
     }
 
+    app.windowDestroyHook=SetWinEventHook(EVENT_OBJECT_DESTROY,EVENT_OBJECT_DESTROY,
+        nullptr,DynamicWindowDestroyHook,0,0,
+        WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
+    if(!app.windowDestroyHook) {
+        ShutdownZoneSmith(app);
+        return false;
+    }
     return true;
 }
 
@@ -148,6 +156,12 @@ void ShutdownZoneSmith(
     );
 
     HideOverlay(app);
+    UpdateDynamicDividerGuides(app,false);
+    if(app.windowDestroyHook) {
+        UnhookWinEvent(app.windowDestroyHook);
+        app.windowDestroyHook=nullptr;
+    }
+    DestroyDynamicDividerGuides(app);
 
     if (app.moveSizeHook) {
         UnhookWinEvent(
