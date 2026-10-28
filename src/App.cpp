@@ -145,6 +145,10 @@ bool InitializeZoneSmith(
         ShutdownZoneSmith(app);
         return false;
     }
+    if(!SetTimer(app.overlay,kDynamicMaintenanceTimerId,750,nullptr)) {
+        ShutdownZoneSmith(app);
+        return false;
+    }
     return true;
 }
 
@@ -155,6 +159,7 @@ void ShutdownZoneSmith(
         app
     );
 
+    if(app.overlay) KillTimer(app.overlay,kDynamicMaintenanceTimerId);
     HideOverlay(app);
     UpdateDynamicDividerGuides(app,false);
     if(app.windowDestroyHook) {
