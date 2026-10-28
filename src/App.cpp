@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "InputHooks.h"
+#include "Dynamic.h"
 #include "Overlay.h"
 #include "OverlayWindow.h"
 #include "WindowCycle.h"
@@ -148,6 +149,7 @@ void ShutdownZoneSmith(
     );
 
     HideOverlay(app);
+    DestroyDynamicDividerGuides(app);
 
     if (app.moveSizeHook) {
         UnhookWinEvent(
