@@ -6,6 +6,7 @@
 
 namespace {
 using Tree = DynamicTree;
+bool MonitorWorkForKey(const std::wstring& key,RECT& work);
 bool HasChildren(const DynamicNode& node) { return node.first >= 0; }
 int Extent(const RECT& r, bool vertical) {
     return vertical ? r.right - r.left : r.bottom - r.top;
@@ -298,9 +299,16 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     // The monitor is stable for a divider drag, even if the cursor leaves it.
     POINT middle{(app.dynamicDividerBounds.left+app.dynamicDividerBounds.right)/2,
                  (app.dynamicDividerBounds.top+app.dynamicDividerBounds.bottom)/2};
-    Reflow(it->second,it->second.root,WorkForPoint(middle),app.snapPadding);
+    // Preview only: live SetWindowPos triggered window-manager feedback and snapback.
     if(app.dynamicGuideOverlay) InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
     return true;
+}
+void CommitDynamicDividerDrag(AppState& app) {
+    if(app.dynamicDividerNode<0) return;
+    auto it=app.dynamicTrees.find(app.dynamicDividerMonitor);
+    RECT work{};
+    if(it!=app.dynamicTrees.end() && MonitorWorkForKey(app.dynamicDividerMonitor,work))
+        Reflow(it->second,it->second.root,work,app.snapPadding);
 }
 void EndDynamicDividerDrag(AppState& app) {
     app.dynamicDividerNode=-1;
@@ -387,6 +395,10 @@ void ReconcileDynamicWindows(AppState& app) {
                    !ContainsWindow(tree,tree.root,node.window))
                     continue;
                 if(!IsWindow(node.window) || IsIconic(node.window)) {
+                    if(IsWindow(node.window) && IsIconic(node.window))
+                        app.minimizedDynamicWindows[node.window]=key;
+                    else
+                        app.minimizedDynamicWindows.erase(node.window);
                     invalid=node.window;
                     break;
                 }
@@ -401,6 +413,35 @@ void ReconcileDynamicWindows(AppState& app) {
             if(tree.root>=0 && MonitorWorkForKey(key,work))
                 Reflow(tree,tree.root,work,app.snapPadding);
         }
+    }
+    // Restore minimized tiles automatically, without taking over ordinary windows.
+    for(auto it=app.minimizedDynamicWindows.begin();it!=app.minimizedDynamicWindows.end();) {
+        HWND window=it->first;
+        const std::wstring key=it->second;
+        if(!IsWindow(window)) {
+            it=app.minimizedDynamicWindows.erase(it);
+            continue;
+        }
+        if(IsIconic(window)) { ++it; continue; }
+        auto& tree=app.dynamicTrees[key];
+        RECT work{};
+        if(MonitorWorkForKey(key,work) && !ContainsWindow(tree,tree.root,window)) {
+            if(tree.root<0) {
+                tree.nodes.push_back(DynamicNode{window});
+                tree.root=static_cast<int>(tree.nodes.size())-1;
+            } else {
+                // Restore as a right-hand sibling, preserving the rest of the tree.
+                int prior=tree.root;
+                int leaf=static_cast<int>(tree.nodes.size());
+                tree.nodes.push_back(DynamicNode{window});
+                int parent=static_cast<int>(tree.nodes.size());
+                tree.nodes.push_back(DynamicNode{nullptr,prior,leaf,true,0.7});
+                tree.root=parent;
+            }
+            Reflow(tree,tree.root,work,app.snapPadding);
+            changedAny=true;
+        }
+        it=app.minimizedDynamicWindows.erase(it);
     }
     if(changedAny && app.dynamicGuideOverlay)
         InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
@@ -418,6 +459,7 @@ void ReleaseDestroyedDynamicWindow(AppState& app,HWND window) {
     }
     if(!changed) return;
     app.savedWindows.erase(window);
+    app.minimizedDynamicWindows.erase(window);
     if(app.dragWindow==window) app.dragWindow=nullptr;
     if(app.pendingDynamicWindow==window) app.pendingDynamicWindow=nullptr;
     if(app.dynamicGuideOverlay)
