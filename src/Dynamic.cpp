@@ -243,6 +243,7 @@ bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
     app.dynamicDividerMonitor=key;
     app.dynamicDividerNode=edge.index;
     app.dynamicDividerBounds=edge.rect;
+    if(app.dividerGuideWindow) InvalidateRect(app.dividerGuideWindow,nullptr,FALSE);
     ++app.dynamicDividerCaptureCount;
     wchar_t log[256]{};
     swprintf_s(log,L"[ZoneSmith divider] CAPTURE node=%d x=%ld y=%ld tolerance=30\\n",
@@ -265,6 +266,7 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     app.dynamicDividerApplying=true;
     Reflow(it->second,it->second.root,WorkForPoint(middle),app.snapPadding);
     app.dynamicDividerApplying=false;
+    if(app.dividerGuideWindow) InvalidateRect(app.dividerGuideWindow,nullptr,FALSE);
     ++app.dynamicDividerApplyCount;
     wchar_t log[256]{};
     swprintf_s(log,L"[ZoneSmith divider] APPLY node=%d ratio=%.3f moves=%u applies=%u\\n",
@@ -280,4 +282,104 @@ void EndDynamicDividerDrag(AppState& app) {
     OutputDebugStringW(log);
     app.dynamicDividerNode=-1;
     app.dynamicDividerMonitor.clear();
+    if(app.dividerGuideWindow) InvalidateRect(app.dividerGuideWindow,nullptr,FALSE);
+}
+
+namespace {
+constexpr wchar_t kDividerGuideClass[] = L"ZoneSmithDividerGuide";
+void DrawDividerLines(HDC dc,const DynamicTree& tree,int index,RECT area,POINT origin,int active) {
+    if(index<0 || index>=static_cast<int>(tree.nodes.size())) return;
+    const auto& node=tree.nodes[index];
+    if(!HasChildren(node)) return;
+    auto [first,second]=Divide(area,node);
+    RECT bar=node.vertical ?
+        RECT{first.right-4,area.top+4,first.right+4,area.bottom-4} :
+        RECT{area.left+4,first.bottom-4,area.right-4,first.bottom+4};
+    OffsetRect(&bar,-origin.x,-origin.y);
+    HBRUSH brush=CreateSolidBrush(index==active?RGB(255,184,35):RGB(35,214,239));
+    FillRect(dc,&bar,brush);
+    DeleteObject(brush);
+    DrawDividerLines(dc,tree,node.first,first,origin,active);
+    DrawDividerLines(dc,tree,node.second,second,origin,active);
+}
+LRESULT CALLBACK DividerGuideProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
+    if(message==WM_NCHITTEST) return HTTRANSPARENT;
+    if(message==WM_ERASEBKGND) return 1;
+    if(message==WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc=BeginPaint(hwnd,&ps);
+        RECT client{};
+        GetClientRect(hwnd,&client);
+        FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        auto* app=reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
+        if(app) {
+            RECT bounds{};
+            GetWindowRect(hwnd,&bounds);
+            POINT point{bounds.left+(bounds.right-bounds.left)/2,
+                        bounds.top+(bounds.bottom-bounds.top)/2};
+            auto tree=app->dynamicTrees.find(KeyForPoint(point));
+            if(tree!=app->dynamicTrees.end()) {
+                const int active=app->dynamicDividerMonitor==KeyForPoint(point)
+                    ?app->dynamicDividerNode:-1;
+                DrawDividerLines(dc,tree->second,tree->second.root,bounds,
+                                 POINT{bounds.left,bounds.top},active);
+            }
+        }
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd,message,wp,lp);
+}
+}
+bool IsNearDynamicDivider(const AppState& app,POINT cursor) {
+    auto it=app.dynamicTrees.find(KeyForPoint(cursor));
+    if(it==app.dynamicTrees.end() || it->second.root<0) return false;
+    Edge edge;
+    FindEdge(it->second,it->second.root,WorkForPoint(cursor),cursor,edge);
+    return edge.index>=0;
+}
+void ShowDynamicDividerGuides(AppState& app,bool enabled) {
+    if(!enabled || app.paused) {
+        app.dividerGuideVisible=false;
+        if(app.dividerGuideWindow) ShowWindow(app.dividerGuideWindow,SW_HIDE);
+        return;
+    }
+    auto key=KeyForPoint(app.cursor);
+    auto selected=app.monitorLayouts.find(key);
+    if(selected!=app.monitorLayouts.end() && selected->second!=L"Dynamic") {
+        if(app.dividerGuideWindow) ShowWindow(app.dividerGuideWindow,SW_HIDE);
+        app.dividerGuideVisible=false;
+        return;
+    }
+    if(app.dynamicTrees.find(key)==app.dynamicTrees.end() ||
+       app.dynamicTrees.at(key).root<0) return;
+    if(!app.dividerGuideWindow) {
+        WNDCLASSW cls{};
+        cls.hInstance=app.instance;
+        cls.lpfnWndProc=DividerGuideProc;
+        cls.lpszClassName=kDividerGuideClass;
+        RegisterClassW(&cls);
+        app.dividerGuideWindow=CreateWindowExW(
+            WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TRANSPARENT|
+            WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,
+            kDividerGuideClass,L"",WS_POPUP,0,0,1,1,
+            nullptr,nullptr,app.instance,nullptr);
+        if(!app.dividerGuideWindow) return;
+        SetWindowLongPtrW(app.dividerGuideWindow,GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(&app));
+        SetLayeredWindowAttributes(app.dividerGuideWindow,RGB(0,0,0),0,LWA_COLORKEY);
+    }
+    RECT bounds=WorkForPoint(app.cursor);
+    SetWindowPos(app.dividerGuideWindow,HWND_TOPMOST,bounds.left,bounds.top,
+                 bounds.right-bounds.left,bounds.bottom-bounds.top,
+                 SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    app.dividerGuideVisible=true;
+    InvalidateRect(app.dividerGuideWindow,nullptr,FALSE);
+}
+void DestroyDynamicDividerGuides(AppState& app) {
+    if(app.dividerGuideWindow) {
+        DestroyWindow(app.dividerGuideWindow);
+        app.dividerGuideWindow=nullptr;
+    }
+    if(app.instance) UnregisterClassW(kDividerGuideClass,app.instance);
 }
