@@ -38,7 +38,7 @@ bool Remove(Tree& tree,int& index,HWND window) {
     if (index < 0) return false;
     auto& n=tree.nodes[index];
     if (!HasChildren(n)) {
-        if (n.window != window && n.window && IsWindow(n.window)) return false;
+        if (n.window != window) return false;
         index=-1;
         return true;
     }
@@ -350,33 +350,73 @@ void DestroyDynamicDividerGuides(AppState& app) {
     if(app.instance) UnregisterClassW(kGuideClass,app.instance);
 }
 
-void ReleaseDestroyedDynamicWindow(AppState& app,HWND window) {
-    // A destroyed HWND may already be invalid; match the stored identity,
-    // not IsWindow(), and never reflow an unrelated application.
-    bool affected=false;
+namespace {
+struct MonitorLookup { const std::wstring* key; RECT work{}; bool found{}; };
+BOOL CALLBACK FindMonitorByKey(HMONITOR monitor,HDC,LPRECT,LPARAM param) {
+    auto& lookup=*reinterpret_cast<MonitorLookup*>(param);
+    MONITORINFOEXW info{sizeof(info)};
+    if(!GetMonitorInfoW(monitor,&info)) return TRUE;
+    std::wstring name=info.szDevice;
+    if(name.starts_with(L"\\\\.\\")) name.erase(0,4);
+    std::transform(name.begin(),name.end(),name.begin(),
+       [](wchar_t c){return static_cast<wchar_t>(towlower(c));});
+    if(name==*lookup.key) {
+        lookup.work=info.rcWork;
+        lookup.found=true;
+        return FALSE;
+    }
+    return TRUE;
+}
+bool MonitorWorkForKey(const std::wstring& key,RECT& work) {
+    MonitorLookup lookup{&key};
+    EnumDisplayMonitors(nullptr,nullptr,FindMonitorByKey,reinterpret_cast<LPARAM>(&lookup));
+    if(lookup.found) work=lookup.work;
+    return lookup.found;
+}
+}
+void ReconcileDynamicWindows(AppState& app) {
+    if(app.dynamicDividerNode>=0 || app.dragWindow || app.pendingDynamicWindow)
+        return;
+    bool changedAny=false;
     for(auto& [key,tree]:app.dynamicTrees) {
-        if(!ContainsWindow(tree,tree.root,window)) continue;
-        RECT remainingWork{};
-        bool haveWork=false;
-        // Capture the monitor from a surviving tile before modifying the tree.
-        for(const auto& node:tree.nodes) {
-            if(HasChildren(node) || !node.window || node.window==window ||
-               !ContainsWindow(tree,tree.root,node.window) || !IsWindow(node.window))
-                continue;
-            MONITORINFO info{sizeof(info)};
-            if(GetMonitorInfoW(MonitorFromWindow(node.window,MONITOR_DEFAULTTONEAREST),&info)) {
-                remainingWork=info.rcWork;
-                haveWork=true;
-                break;
+        bool changed=false;
+        for(;;) {
+            HWND invalid=nullptr;
+            for(const auto& node:tree.nodes) {
+                if(HasChildren(node) || !node.window ||
+                   !ContainsWindow(tree,tree.root,node.window))
+                    continue;
+                if(!IsWindow(node.window) || IsIconic(node.window)) {
+                    invalid=node.window;
+                    break;
+                }
             }
+            if(!invalid || !Remove(tree,tree.root,invalid)) break;
+            app.savedWindows.erase(invalid);
+            changed=true;
         }
-        if(Remove(tree,tree.root,window)) {
-            affected=true;
-            if(haveWork && tree.root>=0)
-                Reflow(tree,tree.root,remainingWork,app.snapPadding);
+        if(changed) {
+            changedAny=true;
+            RECT work{};
+            if(tree.root>=0 && MonitorWorkForKey(key,work))
+                Reflow(tree,tree.root,work,app.snapPadding);
         }
     }
-    if(!affected) return;
+    if(changedAny && app.dynamicGuideOverlay)
+        InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
+}
+void ReleaseDestroyedDynamicWindow(AppState& app,HWND window) {
+    if(!window) return;
+    bool changed=false;
+    for(auto& [key,tree]:app.dynamicTrees) {
+        if(!ContainsWindow(tree,tree.root,window)) continue;
+        if(!Remove(tree,tree.root,window)) continue;
+        changed=true;
+        RECT work{};
+        if(tree.root>=0 && MonitorWorkForKey(key,work))
+            Reflow(tree,tree.root,work,app.snapPadding);
+    }
+    if(!changed) return;
     app.savedWindows.erase(window);
     if(app.dragWindow==window) app.dragWindow=nullptr;
     if(app.pendingDynamicWindow==window) app.pendingDynamicWindow=nullptr;
