@@ -331,6 +331,10 @@ LRESULT CALLBACK MouseHook(
             WM_MOUSEMOVE &&
         app.leftDown
     ) {
+        if (app.dragWindow && !app.overlayVisible) {
+            SelectMonitor(app,event->pt);
+            if (IsDynamicLayout(app)) ShowOverlay(app,event->pt);
+        }
         if (
             app.overlayVisible
         ) {
@@ -364,7 +368,7 @@ LRESULT CALLBACK MouseHook(
 
             if (
                 zones !=
-                app.hotZones
+                app.hotZones || IsDynamicLayout(app)
             ) {
                 app.hotZones =
                     zones;
