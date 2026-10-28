@@ -296,24 +296,35 @@ LRESULT CALLBACK MouseHook(
 
     //
     // ------------------------------------------------------------
-    // Dynamic resize: Ctrl+Alt+left-drag an existing divider.
-    // Consume both mouse buttons events to avoid clicking the underlying app.
+    // The low-level mouse hook must NOT swallow mouse movement: doing so
+    // prevents the cursor itself from advancing on some Windows paths.
+    // Never resize other application windows synchronously in this callback.
     if(app.dynamicDividerNode>=0) {
         if(message==WM_MOUSEMOVE) {
-            MoveDynamicDividerDrag(app,event->pt);
-            return 1;
+            app.dynamicDividerLatest=event->pt;
+            ++app.dynamicDividerMoveCount;
+            if(!app.dynamicDividerMoveQueued) {
+                app.dynamicDividerMoveQueued=true;
+                PostMessageW(app.overlay,kDividerMoveMessage,0,0);
+            }
+            return CallNextHookEx(app.mouseHook,code,message,data);
         }
         if(message==WM_LBUTTONUP) {
-            EndDynamicDividerDrag(app);
+            app.dynamicDividerLatest=event->pt;
             app.leftDown=false;
+            PostMessageW(app.overlay,kDividerEndMessage,0,0);
             return 1;
         }
     }
     if(message==WM_LBUTTONDOWN &&
        (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
-       (GetAsyncKeyState(VK_MENU)&0x8000) &&
-       StartDynamicDividerDrag(app,event->pt)) {
-        return 1;
+       (GetAsyncKeyState(VK_MENU)&0x8000)) {
+        if(StartDynamicDividerDrag(app,event->pt)) {
+            app.dragWindow=nullptr;
+            app.leftDown=false;
+            return 1;
+        }
+        ++app.dynamicDividerMissCount;
     }
     // Normal drag / zone behavior
     // ------------------------------------------------------------
@@ -860,6 +871,8 @@ void CALLBACK MoveSizeEventHook(
 
     AppState& app =
         *g_app;
+    if(app.dynamicDividerNode>=0 || app.dynamicDividerApplying)
+        return;
 
     if (
         objectId != OBJID_WINDOW ||
