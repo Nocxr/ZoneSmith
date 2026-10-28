@@ -46,6 +46,9 @@ struct AppState {
     HINSTANCE instance{};
 
     HWND overlay{};
+    HWND dividerGuideWindow{};
+    bool dividerGuideVisible{};
+    bool ignoreDividerAdjacentDrag{};
 
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
