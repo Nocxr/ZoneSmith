@@ -89,6 +89,36 @@ std::wstring KeyForPoint(POINT point) {
     std::transform(key.begin(),key.end(),key.begin(),[](wchar_t ch){return static_cast<wchar_t>(towlower(ch));});
     return key;
 }
+// Only edge bands select a split. The centre is not a valid docking target.
+struct Drop { bool valid{}; bool vertical{}; bool before{}; RECT preview{}; };
+Drop ChooseDrop(RECT area, POINT point) {
+    const double w=std::max(1L,area.right-area.left);
+    const double h=std::max(1L,area.bottom-area.top);
+    const double x=double(point.x-area.left)/w;
+    const double y=double(point.y-area.top)/h;
+    const double left=x, right=1.0-x, top=y, bottom=1.0-y;
+    const double nearest=std::min({left,right,top,bottom});
+    if(nearest > 0.25) return {};
+    const bool vertical=std::min(left,right)<=std::min(top,bottom);
+    const bool first=vertical?left<right:top<bottom;
+    RECT preview=area;
+    if(vertical) {
+        const LONG middle=(area.left+area.right)/2;
+        if(first) preview.right=middle;
+        else preview.left=middle;
+    } else {
+        const LONG middle=(area.top+area.bottom)/2;
+        if(first) preview.bottom=middle;
+        else preview.top=middle;
+    }
+    return {true,vertical,first,preview};
+}
+bool ContainsWindow(const Tree& tree,int index,HWND window) {
+    if(index<0) return false;
+    const auto& n=tree.nodes[index];
+    return HasChildren(n) ? ContainsWindow(tree,n.first,window) ||
+                            ContainsWindow(tree,n.second,window) : n.window==window;
+}
 int Insert(Tree& tree,int index,HWND window,POINT point,RECT area) {
     if(index<0) {
         tree.nodes.push_back(DynamicNode{window});
@@ -96,13 +126,10 @@ int Insert(Tree& tree,int index,HWND window,POINT point,RECT area) {
     }
     auto leaf=FindLeaf(tree,index,area,point);
     if(leaf.index<0) return index;
+    const auto drop=ChooseDrop(leaf.rect,point);
+    if(!drop.valid) return index;
     auto current=tree.nodes[leaf.index];
-    double x=double(point.x-leaf.rect.left)/std::max(1L,leaf.rect.right-leaf.rect.left);
-    double y=double(point.y-leaf.rect.top)/std::max(1L,leaf.rect.bottom-leaf.rect.top);
-    // Drop near a horizontal edge => top/bottom; otherwise left/right.
-    const double dx=std::min(x,1.0-x),dy=std::min(y,1.0-y);
-    bool vertical=dx<=dy;
-    bool before=vertical?x<0.5:y<0.5;
+    const bool vertical=drop.vertical, before=drop.before;
     const int previous=static_cast<int>(tree.nodes.size());
     tree.nodes.push_back(current);
     const int added=static_cast<int>(tree.nodes.size());
@@ -119,38 +146,55 @@ RECT DynamicPreview(const AppState& app,POINT cursor) {
     RECT work=WorkForPoint(cursor);
     auto it=app.dynamicTrees.find(KeyForPoint(cursor));
     if(it==app.dynamicTrees.end() || it->second.root<0) return work;
-    auto leaf=FindLeaf(it->second,it->second.root,work,cursor);
-    if(leaf.index<0) return work;
-    double x=double(cursor.x-leaf.rect.left)/std::max(1L,leaf.rect.right-leaf.rect.left);
-    double y=double(cursor.y-leaf.rect.top)/std::max(1L,leaf.rect.bottom-leaf.rect.top);
-    bool vertical=std::min(x,1.0-x)<=std::min(y,1.0-y);
-    bool before=vertical?x<0.5:y<0.5;
-    auto area=leaf.rect;
-    if(vertical) {
-        if(before) area.right=(area.left+area.right)/2;
-        else area.left=(area.left+area.right)/2;
-    } else {
-        if(before) area.bottom=(area.top+area.bottom)/2;
-        else area.top=(area.top+area.bottom)/2;
-    }
-    return area;
+    // The dragged tile is removed from a COPY, making preview agree with insertion.
+    Tree preview=it->second;
+    if(app.dragWindow) Remove(preview,preview.root,app.dragWindow);
+    if(preview.root<0) return work;
+    auto leaf=FindLeaf(preview,preview.root,work,cursor);
+    if(leaf.index<0) return RECT{};
+    const auto drop=ChooseDrop(leaf.rect,cursor);
+    return drop.valid?drop.preview:RECT{};
 }
 void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     if(!window || !IsWindow(window)) return;
     const std::wstring key=KeyForPoint(cursor);
-    RECT work=WorkForPoint(cursor);
+    const RECT work=WorkForPoint(cursor);
+    // Determine intent before modifying live state. Invalid targets never disturb tiles.
+    Tree preview=app.dynamicTrees[key];
+    Remove(preview,preview.root,window);
+    if(preview.root>=0) {
+        auto leaf=FindLeaf(preview,preview.root,work,cursor);
+        if(leaf.index<0 || !ChooseDrop(leaf.rect,cursor).valid) return;
+    }
+    // Remove the window from its old tree AND immediately reflow that monitor.
     for(auto& [monitor,tree]:app.dynamicTrees) {
-        if(Remove(tree,tree.root,window) && monitor!=key) {
-            // The other monitor's existing tiles retain their saved geometry until touched.
+        if(Remove(tree,tree.root,window)) {
+            // Resolve a monitor's bounds from one of its remaining windows.
+            if(tree.root>=0 && monitor!=key) {
+                HWND surviving=nullptr;
+                for(const auto& node:tree.nodes) {
+                    if(!HasChildren(node) && node.window && IsWindow(node.window)
+                        && ContainsWindow(tree,tree.root,node.window)) {
+                        surviving=node.window;
+                        break;
+                    }
+                }
+                if(surviving) {
+                    MONITORINFO info{sizeof(info)};
+                    if(GetMonitorInfoW(MonitorFromWindow(surviving,MONITOR_DEFAULTTONEAREST),&info))
+                        Reflow(tree,tree.root,info.rcWork,app.snapPadding);
+                }
+            }
         }
     }
     auto& tree=app.dynamicTrees[key];
-    // Remove closed windows before inserting.
+    // Prune closed windows reachable in the current tree.
     bool changed=true;
     while(changed) {
         changed=false;
         for(const auto& node:tree.nodes) {
-            if(!HasChildren(node) && node.window && !IsWindow(node.window)) {
+            if(!HasChildren(node) && node.window && !IsWindow(node.window)
+                && ContainsWindow(tree,tree.root,node.window)) {
                 changed=Remove(tree,tree.root,node.window);
                 if(changed) break;
             }
@@ -181,7 +225,6 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     int origin=n.vertical?app.dynamicDividerBounds.left:app.dynamicDividerBounds.top;
     int position=n.vertical?cursor.x:cursor.y;
     n.ratio=std::clamp(double(position-origin)/span,0.15,0.85);
-    MONITORINFOEXW info{sizeof(info)};
     // The monitor is stable for a divider drag, even if the cursor leaves it.
     POINT middle{(app.dynamicDividerBounds.left+app.dynamicDividerBounds.right)/2,
                  (app.dynamicDividerBounds.top+app.dynamicDividerBounds.bottom)/2};
