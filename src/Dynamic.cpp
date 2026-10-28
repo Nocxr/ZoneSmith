@@ -120,95 +120,133 @@ bool ContainsWindow(const Tree& tree,int index,HWND window) {
     return HasChildren(n) ? ContainsWindow(tree,n.first,window) ||
                             ContainsWindow(tree,n.second,window) : n.window==window;
 }
-int Insert(Tree& tree,int index,HWND window,POINT point,RECT area) {
-    if(index<0) {
-        tree.nodes.push_back(DynamicNode{window});
-        return static_cast<int>(tree.nodes.size())-1;
+// One placement operation powers both the live preview and the committed result.
+// The outer 8% of a monitor adds a split above/beside the entire layout.
+// Otherwise the outer 25% of the hovered tile splits only that tile.
+struct Placement {
+    bool valid{};
+    bool rootSplit{};
+    bool swap{};
+    bool vertical{};
+    bool before{};
+    int leaf{-1};
+    RECT destination{};
+};
+Placement ResolvePlacement(const Tree& tree,RECT work,POINT point) {
+    if(!PtInRect(&work,point)) return {};
+    if(tree.root<0) return {true,false,false,true,true,-1,work};
+    const double x=double(point.x-work.left)/std::max(1L,work.right-work.left);
+    const double y=double(point.y-work.top)/std::max(1L,work.bottom-work.top);
+    const double edge=std::min({x,1.0-x,y,1.0-y});
+    if(edge<=0.08) {
+        const bool vertical=std::min(x,1.0-x)<=std::min(y,1.0-y);
+        const bool before=vertical?x<0.5:y<0.5;
+        RECT destination=work;
+        if(vertical) {
+            LONG mid=(work.left+work.right)/2;
+            if(before) destination.right=mid;
+            else destination.left=mid;
+        } else {
+            LONG mid=(work.top+work.bottom)/2;
+            if(before) destination.bottom=mid;
+            else destination.top=mid;
+        }
+        return {true,true,false,vertical,before,-1,destination};
     }
-    auto leaf=FindLeaf(tree,index,area,point);
-    if(leaf.index<0) return index;
+    const auto leaf=FindLeaf(tree,tree.root,work,point);
+    if(leaf.index<0) return {};
     const auto drop=ChooseDrop(leaf.rect,point);
-    if(!drop.valid) return index;
-    auto current=tree.nodes[leaf.index];
-    const bool vertical=drop.vertical, before=drop.before;
-    const int previous=static_cast<int>(tree.nodes.size());
+    if(drop.valid)
+        return {true,false,false,drop.vertical,drop.before,leaf.index,drop.preview};
+    // Center of an occupied tile swaps the dragged window with its occupant.
+    return {true,false,true,false,false,leaf.index,leaf.rect};
+}
+RECT PreviewPlacement(const Tree& source,RECT work,POINT point) {
+    return ResolvePlacement(source,work,point).destination;
+}
+bool ApplyPlacement(Tree& tree,HWND window,RECT work,POINT point) {
+    const Placement placement=ResolvePlacement(tree,work,point);
+    if(!placement.valid) return false;
+    if(tree.root<0) {
+        tree.nodes.push_back(DynamicNode{window});
+        tree.root=static_cast<int>(tree.nodes.size())-1;
+        return true;
+    }
+    if(placement.swap) {
+        if(placement.leaf<0) return false;
+        tree.nodes[placement.leaf].window=window;
+        return true;
+    }
+    const int previous=placement.rootSplit?tree.root:placement.leaf;
+    if(previous<0) return false;
+    DynamicNode current=tree.nodes[previous];
+    const int previousCopy=static_cast<int>(tree.nodes.size());
     tree.nodes.push_back(current);
-    const int added=static_cast<int>(tree.nodes.size());
+    const int newLeaf=static_cast<int>(tree.nodes.size());
     tree.nodes.push_back(DynamicNode{window});
-    tree.nodes[leaf.index]=DynamicNode{nullptr,
-        before?added:previous,before?previous:added,vertical,0.5};
-    return index;
+    const DynamicNode split{nullptr,
+        placement.before?newLeaf:previousCopy,
+        placement.before?previousCopy:newLeaf,
+        placement.vertical,0.5};
+    if(placement.rootSplit) {
+        tree.nodes.push_back(split);
+        tree.root=static_cast<int>(tree.nodes.size())-1;
+    } else tree.nodes[previous]=split;
+    return true;
 }
 }
 bool IsDynamicLayout(const AppState& app) {
     return !app.layouts.empty() && CurrentLayout(app).name==L"Dynamic";
 }
 RECT DynamicPreview(const AppState& app,POINT cursor) {
-    RECT work=WorkForPoint(cursor);
+    const RECT work=WorkForPoint(cursor);
     auto it=app.dynamicTrees.find(KeyForPoint(cursor));
     if(it==app.dynamicTrees.end() || it->second.root<0) return work;
-    // The dragged tile is removed from a COPY, making preview agree with insertion.
     Tree preview=it->second;
     if(app.dragWindow) Remove(preview,preview.root,app.dragWindow);
-    if(preview.root<0) return work;
-    auto leaf=FindLeaf(preview,preview.root,work,cursor);
-    if(leaf.index<0) return RECT{};
-    const auto drop=ChooseDrop(leaf.rect,cursor);
-    return drop.valid?drop.preview:RECT{};
+    return PreviewPlacement(preview,work,cursor);
 }
 void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     if(!window || !IsWindow(window)) return;
     const std::wstring key=KeyForPoint(cursor);
     const RECT work=WorkForPoint(cursor);
-    // A drop in the centre undocks an existing tile rather than randomly
-    // splitting a neighbour. Previously this silently left gaps.
-    Tree preview=app.dynamicTrees[key];
-    Remove(preview,preview.root,window);
-    bool canDock=preview.root<0;
-    if(!canDock) {
-        auto leaf=FindLeaf(preview,preview.root,work,cursor);
-        canDock=leaf.index>=0 && ChooseDrop(leaf.rect,cursor).valid;
-    }
-    bool wasTiled=false;
-    for(const auto& [monitor,tree]:app.dynamicTrees)
-        wasTiled=wasTiled || ContainsWindow(tree,tree.root,window);
-    if(!canDock && !wasTiled) return;
-    // Remove the window from its old tree AND immediately reflow that monitor.
+    Tree proposal=app.dynamicTrees[key];
+    Remove(proposal,proposal.root,window);
+    const auto placement=ResolvePlacement(proposal,work,cursor);
+    if(!placement.valid) return;
+    // Swapping an occupied leaf keeps the displaced window in the source slot
+    // when one exists. Otherwise it remains a floating window.
+    HWND displaced=nullptr;
+    if(placement.swap && placement.leaf>=0)
+        displaced=proposal.nodes[placement.leaf].window;
+    if(!ApplyPlacement(proposal,window,work,cursor)) return;
     for(auto& [monitor,tree]:app.dynamicTrees) {
-        if(Remove(tree,tree.root,window)) {
-            // Resolve a monitor's bounds from one of its remaining windows.
-            if(tree.root>=0 && monitor!=key) {
-                HWND surviving=nullptr;
-                for(const auto& node:tree.nodes) {
-                    if(!HasChildren(node) && node.window && IsWindow(node.window)
-                        && ContainsWindow(tree,tree.root,node.window)) {
-                        surviving=node.window;
-                        break;
-                    }
-                }
-                if(surviving) {
-                    MONITORINFO info{sizeof(info)};
-                    if(GetMonitorInfoW(MonitorFromWindow(surviving,MONITOR_DEFAULTTONEAREST),&info))
-                        Reflow(tree,tree.root,info.rcWork,app.snapPadding);
-                }
+        if(monitor==key) continue;
+        if(!ContainsWindow(tree,tree.root,window)) continue;
+        Remove(tree,tree.root,window);
+        if(displaced) {
+            if(tree.root<0) {
+                tree.nodes.push_back(DynamicNode{displaced});
+                tree.root=static_cast<int>(tree.nodes.size())-1;
+            } else {
+                // Swapping back into a source tile is preferable to dropping it.
+                auto old=FindLeaf(tree,tree.root,work,cursor);
+                if(old.index>=0) tree.nodes[old.index].window=displaced;
             }
         }
-    }
-    auto& tree=app.dynamicTrees[key];
-    // Prune closed windows reachable in the current tree.
-    bool changed=true;
-    while(changed) {
-        changed=false;
+        // Source-monitor reflow uses its own display bounds.
         for(const auto& node:tree.nodes) {
-            if(!HasChildren(node) && node.window && !IsWindow(node.window)
-                && ContainsWindow(tree,tree.root,node.window)) {
-                changed=Remove(tree,tree.root,node.window);
-                if(changed) break;
+            if(!HasChildren(node) && node.window &&
+               ContainsWindow(tree,tree.root,node.window) && IsWindow(node.window)) {
+                MONITORINFO info{sizeof(info)};
+                if(GetMonitorInfoW(MonitorFromWindow(node.window,MONITOR_DEFAULTTONEAREST),&info))
+                    Reflow(tree,tree.root,info.rcWork,app.snapPadding);
+                break;
             }
         }
     }
-    if(canDock) tree.root=Insert(tree,tree.root,window,cursor,work);
-    if(tree.root>=0) Reflow(tree,tree.root,work,app.snapPadding);
+    app.dynamicTrees[key]=std::move(proposal);
+    Reflow(app.dynamicTrees[key],app.dynamicTrees[key].root,work,app.snapPadding);
 }
 bool DetachDynamicWindow(AppState& app,HWND window) {
     if(!window) return false;
