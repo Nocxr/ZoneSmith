@@ -77,6 +77,7 @@ void FindEdge(const Tree& tree,int index,RECT rect,POINT point,Edge& found) {
     FindEdge(tree,n.second,b,point,found);
 }
 // The guide window never receives input. Black is the transparent color key.
+std::wstring KeyForPoint(POINT point);
 constexpr wchar_t kGuideClass[]=L"ZoneSmithDynamicGuides";
 void PaintSplitGuides(HDC dc,const Tree& tree,int index,RECT area,POINT origin,int active) {
     if(index<0) return;
@@ -107,8 +108,10 @@ LRESULT CALLBACK GuideProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
         FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         auto* app=reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
         if(app) {
-            RECT monitor=app->monitorWork;
-            auto tree=app->dynamicTrees.find(app->currentMonitorKey);
+            RECT monitor{};
+            GetWindowRect(hwnd,&monitor);
+            auto tree=app->dynamicTrees.find(KeyForPoint(
+                POINT{(monitor.left+monitor.right)/2,(monitor.top+monitor.bottom)/2}));
             if(tree!=app->dynamicTrees.end())
                 PaintSplitGuides(dc,tree->second,tree->second.root,monitor,
                                  POINT{monitor.left,monitor.top},app->dynamicDividerNode);
@@ -333,8 +336,6 @@ void UpdateDynamicDividerGuides(AppState& app,bool enabled) {
         ShowWindow(app.dynamicGuideOverlay,SW_HIDE);
         return;
     }
-    app.monitorWork=work;
-    app.currentMonitorKey=key;
     app.dynamicGuidesVisible=true;
     SetWindowPos(app.dynamicGuideOverlay,HWND_TOPMOST,work.left,work.top,
         work.right-work.left,work.bottom-work.top,
