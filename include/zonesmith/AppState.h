@@ -25,6 +25,7 @@ constexpr UINT_PTR kDynamicWindowEventTimerId = 3;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kDividerMoveMessage = WM_APP + 30;
 constexpr UINT kDividerEndMessage = WM_APP + 31;
+constexpr UINT kDynamicResizeMessage = WM_APP + 32;
 constexpr UINT kTrayInstructionsId = 1001;
 constexpr UINT kTrayLayoutsId = 1002;
 constexpr UINT kTrayPauseId = 1003;
@@ -95,6 +96,13 @@ struct AppState {
     // Tiled window being resized by its border; dividers follow on release.
     HWND dynamicResizeWindow{};
     HWND pendingDynamicResize{};
+    // Live border resize: the layout and tile at resize start, and a hook on
+    // the resized window's location changes (coalesced into one message).
+    HWINEVENTHOOK dynamicResizeHook{};
+    bool dynamicResizeQueued{};
+    std::wstring dynamicResizeKey;
+    zsdyn::Tree dynamicResizeBase;
+    RECT dynamicResizeBaseTile{};
     // Minimum visible sizes learned from windows that refused to shrink.
     std::unordered_map<HWND, SIZE> dynamicMinSizes;
     // Windows is ending the session: apps closing must not erase saved layouts.

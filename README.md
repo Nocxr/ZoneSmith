@@ -51,8 +51,8 @@ size the first time it refuses to shrink into a tile.
 
 **Dividers.** Hold Ctrl+Alt to show the dividers, then left-drag one to resize
 the regions on either side. Resizing a tiled window by its border also works:
-on release, every divider that border touches follows it, and the neighbouring
-tiles adjust. Edges on the monitor boundary snap back. Dividers stop where a
+every divider that border touches follows it live, and the neighbouring tiles
+adjust as you drag. Edges on the monitor boundary snap back on release. Dividers stop where a
 window would go below its minimum size.
 
 **Stacks.** Stacked tiles show their window count in the drop overlay and as a

@@ -986,6 +986,7 @@ void CALLBACK MoveSizeEventHook(
         app.dynamicResizeWindow &&
         GetAncestor(window, GA_ROOT) == app.dynamicResizeWindow
     ) {
+        EndDynamicLiveResize(app);
         QueueDynamicResize(app, app.dynamicResizeWindow);
         app.dynamicResizeWindow = nullptr;
     }
@@ -1031,13 +1032,19 @@ void CALLBACK MoveSizeEventHook(
                 : nullptr;
         //
         // Resizing a tiled window's border is not a docking gesture, but
-        // the dividers it touches follow it when it is released.
+        // the dividers it touches follow it live.
         //
         app.dynamicResizeWindow =
             !app.dynamicDragIsMove &&
             IsDynamicTiled(app, app.dragWindow)
                 ? app.dragWindow
                 : nullptr;
+
+        if (app.dynamicResizeWindow) {
+            BeginDynamicLiveResize(app, app.dynamicResizeWindow);
+        } else {
+            EndDynamicLiveResize(app);
+        }
 
         // Resizing a border is not a docking gesture.
         // The original mouse-down must have started on this window's title bar.

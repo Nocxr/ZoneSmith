@@ -19,6 +19,10 @@ void QueueDynamicUndock(AppState& app, HWND window);
 void QueueDynamicReturn(AppState& app, HWND window);
 // A tiled window was resized by its border: move the dividers it touched.
 void QueueDynamicResize(AppState& app, HWND window);
+// While a tiled window is resized by its border, its neighbours follow live.
+void BeginDynamicLiveResize(AppState& app, HWND window);
+void ApplyDynamicLiveResize(AppState& app);
+void EndDynamicLiveResize(AppState& app);
 // Returns true when a dynamic drop was handled (so static snapping is skipped).
 bool ApplyPendingDynamicOperation(AppState& app);
 void PaintDynamicOverlay(const AppState& app, HDC dc, RECT client);

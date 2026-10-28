@@ -24,6 +24,9 @@ LRESULT CALLBACK ZoneSmithOverlayProc(
         *g_app;
 
     switch (message) {
+    case kDynamicResizeMessage:
+        ApplyDynamicLiveResize(app);
+        return 0;
     case kDividerMoveMessage:
         app.dynamicDividerMoveQueued=false;
         if(app.dynamicDividerNode>=0)

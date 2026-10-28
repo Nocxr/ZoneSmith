@@ -338,6 +338,90 @@ void QueueDynamicResize(AppState& app, HWND window) {
     SetTimer(app.overlay, kSnapTimerId, 75, nullptr);
 }
 
+namespace {
+void CALLBACK DynamicResizeEventHook(HWINEVENTHOOK, DWORD, HWND window, LONG objectId, LONG childId,
+                                     DWORD, DWORD) {
+    if (!g_app || window != g_app->dynamicResizeWindow || objectId != OBJID_WINDOW ||
+        childId != CHILDID_SELF || g_app->dynamicResizeQueued)
+        return;
+    // Coalesce a burst of size changes into one layout update.
+    g_app->dynamicResizeQueued = true;
+    PostMessageW(g_app->overlay, kDynamicResizeMessage, 0, 0);
+}
+}  // namespace
+
+void BeginDynamicLiveResize(AppState& app, HWND window) {
+    EndDynamicLiveResize(app);
+    for (const auto& [key, state] : app.dynamicMonitors) {
+        RECT work{};
+        if (!zsdyn::Contains(state.tree, Id(window)) || !IsDynamicKey(app, key) || !WorkForKey(key, work))
+            continue;
+        bool found = false;
+        for (const auto& leaf : zsdyn::Leaves(OnScreen(state.tree), ToModel(work))) {
+            if (std::find(leaf.windows.begin(), leaf.windows.end(), Id(window)) == leaf.windows.end())
+                continue;
+            app.dynamicResizeBaseTile = PaddedTile(app, leaf.rect);
+            found = true;
+        }
+        if (!found) return;
+        app.dynamicResizeKey = key;
+        app.dynamicResizeBase = state.tree;
+        DWORD process = 0;
+        GetWindowThreadProcessId(window, &process);
+        app.dynamicResizeHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+                                                nullptr, DynamicResizeEventHook, process, 0,
+                                                WINEVENT_OUTOFCONTEXT);
+        return;
+    }
+}
+
+void ApplyDynamicLiveResize(AppState& app) {
+    app.dynamicResizeQueued = false;
+    const HWND window = app.dynamicResizeWindow;
+    if (!window || !IsWindow(window) || app.dynamicResizeKey.empty()) return;
+    const auto it = app.dynamicMonitors.find(app.dynamicResizeKey);
+    RECT work{};
+    if (it == app.dynamicMonitors.end() || !WorkForKey(app.dynamicResizeKey, work)) return;
+
+    // Always compute from the layout at resize start, so shrinking back to
+    // the original size restores the original neighbours exactly.
+    const zsdyn::Tree& base = app.dynamicResizeBase;
+    const zsdyn::Tree baseVisible = OnScreen(base);
+    const RECT actual = VisibleWindowRect(window);
+    const RECT& tile = app.dynamicResizeBaseTile;
+    const bool resized =
+        std::abs((actual.right - actual.left) - (tile.right - tile.left)) > 3 ||
+        std::abs((actual.bottom - actual.top) - (tile.bottom - tile.top)) > 3;
+    zsdyn::Tree next = base;
+    if (resized) {
+        const zsdyn::Rect edges{actual.left - app.snapPadding, actual.top - app.snapPadding,
+                                actual.right + app.snapPadding, actual.bottom + app.snapPadding};
+        auto updated = zsdyn::ResizeTile(base, baseVisible, ToModel(work), Id(window), edges);
+        // Past a neighbour's minimum size the neighbours stop where they are.
+        if (!updated || !NewlyTooSmall(app, baseVisible, OnScreen(*updated), ToModel(work)).empty())
+            return;
+        next = std::move(*updated);
+    }
+    if (next == it->second.tree) return;
+    it->second.tree = std::move(next);
+    ++it->second.revision;
+
+    // Move every other window; the one being resized belongs to Windows'
+    // resize loop until release, when the final reflow snaps it to its tile.
+    auto placements = zsdyn::Placements(OnScreen(it->second.tree), ToModel(work));
+    std::erase_if(placements, [&](const auto& p) { return p.window == Id(window); });
+    Place(app, placements);
+    if (app.dividerGuideWindow) InvalidateRect(app.dividerGuideWindow, nullptr, FALSE);
+}
+
+void EndDynamicLiveResize(AppState& app) {
+    if (app.dynamicResizeHook) UnhookWinEvent(app.dynamicResizeHook);
+    app.dynamicResizeHook = nullptr;
+    app.dynamicResizeQueued = false;
+    app.dynamicResizeKey.clear();
+    app.dynamicResizeBase = {};
+}
+
 bool ApplyPendingDynamicOperation(AppState& app) {
     if (const HWND window = std::exchange(app.pendingDynamicResize, nullptr); window && IsWindow(window)) {
         for (auto& [key, state] : app.dynamicMonitors) {
@@ -723,6 +807,7 @@ bool InstallDynamicWindowHooks(AppState& app) {
 }
 
 void RemoveDynamicWindowHooks(AppState& app) {
+    EndDynamicLiveResize(app);
     for (HWINEVENTHOOK* hook : {&app.dynamicMinimizeHook, &app.dynamicObjectHook, &app.dynamicCloakHook}) {
         if (*hook) UnhookWinEvent(*hook);
         *hook = nullptr;
@@ -733,7 +818,8 @@ void RemoveDynamicWindowHooks(AppState& app) {
 void ReconcileDynamicWindowStates(AppState& app) {
     // Never move windows under an active gesture or before a queued drop.
     if (app.dynamicDividerNode >= 0 || app.dynamicReflowApplying || app.dragWindow ||
-        app.pendingDynamicDrop.window || app.pendingDynamicUndock)
+        app.dynamicResizeWindow || app.pendingDynamicDrop.window || app.pendingDynamicUndock ||
+        app.pendingDynamicResize)
         return;
     for (auto& [key, state] : app.dynamicMonitors) {
         auto pruned = zsdyn::RemoveWindows(state.tree, IsDeadWindow);
