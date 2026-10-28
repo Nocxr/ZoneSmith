@@ -44,6 +44,8 @@ struct AppState {
     HINSTANCE instance{};
 
     HWND overlay{};
+    HWND dynamicGuideOverlay{};
+    bool dynamicGuidesVisible{};
 
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
