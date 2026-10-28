@@ -66,6 +66,7 @@ struct AppState {
     int dynamicDividerNode{-1};
     RECT dynamicDividerBounds{};
     POINT dynamicDividerCursor{};
+    std::unordered_map<HWND, std::wstring> minimizedDynamicWindows;
     bool dynamicDividerUpdateQueued{};
 
     POINT cursor{};
