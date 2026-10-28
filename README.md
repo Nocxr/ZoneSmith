@@ -21,8 +21,9 @@ the Dynamic drop overlay opens automatically when dragging a window there. Selec
 static INI layouts remain available.
 
 With Dynamic active, drop the first window to fill the monitor's work area.
-Subsequent drops split the occupied tile under the pointer, choosing left/right
-or top/bottom based on the pointer's nearest edge. Existing windows in that tile
+Subsequent drops split the occupied tile only within its outer 25% edge band.
+The preview shows the exact resulting half; a centre drop undocks an already
+tiled window instead of creating an unexpected split. Existing windows in that tile
 shrink automatically. A dropped window must be explicitly docked; ZoneSmith
 does not automatically tile unrelated windows.
 
