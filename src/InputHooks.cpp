@@ -74,6 +74,11 @@ LRESULT CALLBACK MouseHook(
         event->pt;
 
     //
+    if(app.dividerGuideVisible)
+        ShowDynamicDividerGuides(app,
+            (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+            (GetAsyncKeyState(VK_MENU)&0x8000));
+
     // Use Windows' actual current modifier state for mouse
     // behavior. Do not trust the cached keyboard-hook flags.
     //
@@ -321,13 +326,21 @@ LRESULT CALLBACK MouseHook(
        (GetAsyncKeyState(VK_MENU)&0x8000)) {
         OutputDebugStringW(L"[ZoneSmith divider] Ctrl+Alt+left click received\\n");
         if(StartDynamicDividerDrag(app,event->pt)) {
+            ShowDynamicDividerGuides(app,true);
             app.dragWindow=nullptr;
             app.leftDown=false;
             return 1;
         }
         ++app.dynamicDividerMissCount;
     }
-    // Normal drag / zone behavior
+    // A plain click on a shared tile boundary must never turn into a dock.
+    // Leave the event to Windows; ignore snap events for this gesture.
+    if(message==WM_LBUTTONDOWN &&
+       !((GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+         (GetAsyncKeyState(VK_MENU)&0x8000))) {
+        app.ignoreDividerAdjacentDrag=IsNearDynamicDivider(app,event->pt);
+    }
+        // Normal drag / zone behavior
     // ------------------------------------------------------------
     //
     if (
@@ -343,6 +356,8 @@ LRESULT CALLBACK MouseHook(
             WM_MOUSEMOVE &&
         app.leftDown
     ) {
+        if(app.ignoreDividerAdjacentDrag)
+            return CallNextHookEx(app.mouseHook,code,message,data);
         if(app.dragWindow && app.dynamicDragIsMove && !app.dynamicDragDetached) {
             const int dx=event->pt.x-app.dynamicDragOrigin.x;
             const int dy=event->pt.y-app.dynamicDragOrigin.y;
@@ -513,6 +528,13 @@ LRESULT CALLBACK MouseHook(
         message ==
         WM_LBUTTONUP
     ) {
+        if(app.ignoreDividerAdjacentDrag) {
+            app.ignoreDividerAdjacentDrag=false;
+            app.leftDown=false;
+            app.dragWindow=nullptr;
+            HideOverlay(app);
+            return CallNextHookEx(app.mouseHook,code,message,data);
+        }
         if (
             app.overlayVisible
         ) {
@@ -583,7 +605,19 @@ LRESULT CALLBACK KeyboardHook(
         message == WM_KEYUP ||
         message == WM_SYSKEYUP;
 
-    int zoneNumber = -1;
+    const bool ctrlTransition=event->vkCode==VK_CONTROL ||
+        event->vkCode==VK_LCONTROL || event->vkCode==VK_RCONTROL;
+    const bool altTransition=event->vkCode==VK_MENU ||
+        event->vkCode==VK_LMENU || event->vkCode==VK_RMENU;
+    if(ctrlTransition || altTransition) {
+        const bool ctrl=ctrlTransition?keyDown:
+            (GetAsyncKeyState(VK_CONTROL)&0x8000)!=0;
+        const bool alt=altTransition?keyDown:
+            (GetAsyncKeyState(VK_MENU)&0x8000)!=0;
+        ShowDynamicDividerGuides(app,ctrl && alt);
+    }
+
+        int zoneNumber = -1;
 
     if (
         event->vkCode >= '1' &&
@@ -887,6 +921,7 @@ void CALLBACK MoveSizeEventHook(
         event ==
         EVENT_SYSTEM_MOVESIZESTART
     ) {
+        if(app.ignoreDividerAdjacentDrag) return;
         if (
             ShouldSuspendForForeground(
                 app
