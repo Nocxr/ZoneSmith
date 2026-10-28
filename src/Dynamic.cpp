@@ -272,8 +272,13 @@ bool DetachDynamicWindow(AppState& app,HWND window) {
     return removed;
 }
 bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
-    if(app.paused || !IsDynamicLayout(app)) return false;
+    if(app.paused) return false;
     auto key=KeyForPoint(cursor);
+    auto selected=app.monitorLayouts.find(key);
+    if(selected!=app.monitorLayouts.end() && selected->second!=L"Dynamic")
+        return false;
+    if(selected==app.monitorLayouts.end() && !IsDynamicLayout(app))
+        return false;
     auto it=app.dynamicTrees.find(key);
     if(it==app.dynamicTrees.end()) return false;
     Edge edge;
