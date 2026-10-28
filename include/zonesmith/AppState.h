@@ -50,6 +50,7 @@ struct AppState {
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
     HWINEVENTHOOK moveSizeHook{};
+    HWINEVENTHOOK windowDestroyHook{};
 
     HWND dragWindow{};
     POINT dynamicDragOrigin{};
