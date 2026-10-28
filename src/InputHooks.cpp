@@ -871,6 +871,9 @@ void CALLBACK MoveSizeEventHook(
     AppState& app =
         *g_app;
 
+    // Programmatic resize of a captured divider is not a new window drag.
+    if(app.dynamicDividerNode>=0) return;
+
     if (
         objectId != OBJID_WINDOW ||
         !window ||
