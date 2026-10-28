@@ -397,8 +397,11 @@ void ReconcileDynamicWindows(AppState& app) {
                 if(!IsWindow(node.window) || IsIconic(node.window)) {
                     if(IsWindow(node.window) && IsIconic(node.window))
                         app.minimizedDynamicWindows[node.window]=key;
+                        if(!app.minimizedDynamicSnapshots.contains(node.window))
+                            app.minimizedDynamicSnapshots[node.window]=tree;
                     else
                         app.minimizedDynamicWindows.erase(node.window);
+                        app.minimizedDynamicSnapshots.erase(node.window);
                     invalid=node.window;
                     break;
                 }
@@ -419,6 +422,7 @@ void ReconcileDynamicWindows(AppState& app) {
         HWND window=it->first;
         const std::wstring key=it->second;
         if(!IsWindow(window)) {
+            app.minimizedDynamicSnapshots.erase(window);
             it=app.minimizedDynamicWindows.erase(it);
             continue;
         }
@@ -426,11 +430,35 @@ void ReconcileDynamicWindows(AppState& app) {
         auto& tree=app.dynamicTrees[key];
         RECT work{};
         if(MonitorWorkForKey(key,work) && !ContainsWindow(tree,tree.root,window)) {
-            if(tree.root<0) {
+            bool restoredOriginal=false;
+            auto snapshot=app.minimizedDynamicSnapshots.find(window);
+            if(snapshot!=app.minimizedDynamicSnapshots.end()) {
+                // Reinstate the exact split structure only when every other
+                // surviving leaf still belongs to the active layout.
+                bool compatible=true;
+                for(const auto& n:tree.nodes) {
+                    if(!HasChildren(n) && n.window &&
+                       ContainsWindow(tree,tree.root,n.window) &&
+                       !ContainsWindow(snapshot->second,snapshot->second.root,n.window))
+                        compatible=false;
+                }
+                if(compatible) {
+                    tree=snapshot->second;
+                    restoredOriginal=true;
+                    // Other windows minimized while this one was hidden remain absent.
+                    for(const auto& n:snapshot->second.nodes) {
+                        if(HasChildren(n) || !n.window || n.window==window) continue;
+                        if(!ContainsWindow(tree,tree.root,n.window)) continue;
+                        if(!IsWindow(n.window) || IsIconic(n.window))
+                            Remove(tree,tree.root,n.window);
+                    }
+                }
+            }
+            if(!restoredOriginal && tree.root<0) {
                 tree.nodes.push_back(DynamicNode{window});
                 tree.root=static_cast<int>(tree.nodes.size())-1;
-            } else {
-                // Restore as a right-hand sibling, preserving the rest of the tree.
+            } else if(!restoredOriginal) {
+                // Fallback only if the original structure was changed in the meantime.
                 int prior=tree.root;
                 int leaf=static_cast<int>(tree.nodes.size());
                 tree.nodes.push_back(DynamicNode{window});
@@ -441,6 +469,7 @@ void ReconcileDynamicWindows(AppState& app) {
             Reflow(tree,tree.root,work,app.snapPadding);
             changedAny=true;
         }
+        app.minimizedDynamicSnapshots.erase(window);
         it=app.minimizedDynamicWindows.erase(it);
     }
     if(changedAny && app.dynamicGuideOverlay)
@@ -460,6 +489,7 @@ void ReleaseDestroyedDynamicWindow(AppState& app,HWND window) {
     if(!changed) return;
     app.savedWindows.erase(window);
     app.minimizedDynamicWindows.erase(window);
+    app.minimizedDynamicSnapshots.erase(window);
     if(app.dragWindow==window) app.dragWindow=nullptr;
     if(app.pendingDynamicWindow==window) app.pendingDynamicWindow=nullptr;
     if(app.dynamicGuideOverlay)
