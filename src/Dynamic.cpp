@@ -159,13 +159,19 @@ void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     if(!window || !IsWindow(window)) return;
     const std::wstring key=KeyForPoint(cursor);
     const RECT work=WorkForPoint(cursor);
-    // Determine intent before modifying live state. Invalid targets never disturb tiles.
+    // A drop in the centre undocks an existing tile rather than randomly
+    // splitting a neighbour. Previously this silently left gaps.
     Tree preview=app.dynamicTrees[key];
     Remove(preview,preview.root,window);
-    if(preview.root>=0) {
+    bool canDock=preview.root<0;
+    if(!canDock) {
         auto leaf=FindLeaf(preview,preview.root,work,cursor);
-        if(leaf.index<0 || !ChooseDrop(leaf.rect,cursor).valid) return;
+        canDock=leaf.index>=0 && ChooseDrop(leaf.rect,cursor).valid;
     }
+    bool wasTiled=false;
+    for(const auto& [monitor,tree]:app.dynamicTrees)
+        wasTiled=wasTiled || ContainsWindow(tree,tree.root,window);
+    if(!canDock && !wasTiled) return;
     // Remove the window from its old tree AND immediately reflow that monitor.
     for(auto& [monitor,tree]:app.dynamicTrees) {
         if(Remove(tree,tree.root,window)) {
@@ -200,8 +206,8 @@ void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
             }
         }
     }
-    tree.root=Insert(tree,tree.root,window,cursor,work);
-    Reflow(tree,tree.root,work,app.snapPadding);
+    if(canDock) tree.root=Insert(tree,tree.root,window,cursor,work);
+    if(tree.root>=0) Reflow(tree,tree.root,work,app.snapPadding);
 }
 bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
     if(app.paused || !IsDynamicLayout(app)) return false;
