@@ -319,6 +319,7 @@ LRESULT CALLBACK MouseHook(
     if(message==WM_LBUTTONDOWN &&
        (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
        (GetAsyncKeyState(VK_MENU)&0x8000)) {
+        OutputDebugStringW(L"[ZoneSmith divider] Ctrl+Alt+left click received\\n");
         if(StartDynamicDividerDrag(app,event->pt)) {
             app.dragWindow=nullptr;
             app.leftDown=false;
