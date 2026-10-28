@@ -11,3 +11,7 @@ void EndDynamicDividerDrag(AppState& app);
 
 // Frees the original tile when a real window move starts (not when it docks).
 bool DetachDynamicWindow(AppState& app, HWND window);
+
+// Click-through guide overlay while the Ctrl+Alt divider-edit gesture is active.
+void UpdateDynamicDividerGuides(AppState& app, bool enabled);
+void DestroyDynamicDividerGuides(AppState& app);
