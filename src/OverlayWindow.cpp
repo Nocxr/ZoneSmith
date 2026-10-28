@@ -3,6 +3,7 @@
 #include "AppState.h"
 #include "Overlay.h"
 #include "Snap.h"
+#include "Dynamic.h"
 
 LRESULT CALLBACK ZoneSmithOverlayProc(
     HWND window,
@@ -23,6 +24,20 @@ LRESULT CALLBACK ZoneSmithOverlayProc(
         *g_app;
 
     switch (message) {
+    case kDynamicDividerMoveMessage:
+        app.dynamicDividerUpdateQueued=false;
+        if(app.dynamicDividerNode>=0)
+            MoveDynamicDividerDrag(app,app.dynamicDividerCursor);
+        return 0;
+    case kDynamicDividerEndMessage:
+        app.dynamicDividerUpdateQueued=false;
+        if(app.dynamicDividerNode>=0)
+            MoveDynamicDividerDrag(app,app.dynamicDividerCursor);
+        EndDynamicDividerDrag(app);
+        UpdateDynamicDividerGuides(app,false);
+        app.dragWindow=nullptr;
+        HideOverlay(app);
+        return 0;
     case WM_PAINT:
         PaintOverlay(
             app,
