@@ -209,6 +209,22 @@ void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     if(canDock) tree.root=Insert(tree,tree.root,window,cursor,work);
     if(tree.root>=0) Reflow(tree,tree.root,work,app.snapPadding);
 }
+bool DetachDynamicWindow(AppState& app,HWND window) {
+    if(!window) return false;
+    // Capture the original monitor before the user moves the window across monitors.
+    MONITORINFO info{sizeof(info)};
+    if(!GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&info))
+        return false;
+    bool removed=false;
+    for(auto& [key,tree]:app.dynamicTrees) {
+        if(!ContainsWindow(tree,tree.root,window)) continue;
+        if(Remove(tree,tree.root,window)) {
+            removed=true;
+            if(tree.root>=0) Reflow(tree,tree.root,info.rcWork,app.snapPadding);
+        }
+    }
+    return removed;
+}
 bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
     if(app.paused || !IsDynamicLayout(app)) return false;
     auto key=KeyForPoint(cursor);
