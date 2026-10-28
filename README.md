@@ -56,3 +56,14 @@ windows are reflowed using the owning monitor's work area, not the position
 of a potentially moved survivor. This is a safety net for missed Windows
 destroy notifications. Minimized windows are no longer part of that active
 tiling session; restore and explicitly dock them again when needed.
+
+### Divider and minimized-window update
+
+Divider editing now previews the split using highlighted guide bars, without
+repeatedly resizing application windows on every mouse-move callback. Releasing
+Ctrl+Alt+left-drag applies the selected split ratio once. Applications with
+minimum tracking sizes may still refuse an extremely narrow result.
+
+Minimizing a tiled window frees its active space. When restored, ZoneSmith
+automatically rejoins it to the original monitor's dynamic tree (as a
+right-hand sibling in this POC), rather than requiring manual re-docking.
