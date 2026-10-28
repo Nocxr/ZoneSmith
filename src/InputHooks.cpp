@@ -889,6 +889,13 @@ void CALLBACK MoveSizeEventHook(
             )
                 ? app.dragWindow
                 : nullptr;
+        // Dynamic mode uses the existing window drag itself as the dock gesture.
+        // Do not require an additional right-click to expose its drop preview.
+        SelectMonitor(app, app.cursor);
+        if (IsDynamicLayout(app) && app.dragWindow && app.leftDown) {
+            app.selectedZones = 0;
+            ShowOverlay(app, app.cursor);
+        }
     }
 
     else if (
