@@ -349,3 +349,37 @@ void DestroyDynamicDividerGuides(AppState& app) {
     }
     if(app.instance) UnregisterClassW(kGuideClass,app.instance);
 }
+
+void ReleaseDestroyedDynamicWindow(AppState& app,HWND window) {
+    // A destroyed HWND may already be invalid; match the stored identity,
+    // not IsWindow(), and never reflow an unrelated application.
+    bool affected=false;
+    for(auto& [key,tree]:app.dynamicTrees) {
+        if(!ContainsWindow(tree,tree.root,window)) continue;
+        RECT remainingWork{};
+        bool haveWork=false;
+        // Capture the monitor from a surviving tile before modifying the tree.
+        for(const auto& node:tree.nodes) {
+            if(HasChildren(node) || !node.window || node.window==window ||
+               !ContainsWindow(tree,tree.root,node.window) || !IsWindow(node.window))
+                continue;
+            MONITORINFO info{sizeof(info)};
+            if(GetMonitorInfoW(MonitorFromWindow(node.window,MONITOR_DEFAULTTONEAREST),&info)) {
+                remainingWork=info.rcWork;
+                haveWork=true;
+                break;
+            }
+        }
+        if(Remove(tree,tree.root,window)) {
+            affected=true;
+            if(haveWork && tree.root>=0)
+                Reflow(tree,tree.root,remainingWork,app.snapPadding);
+        }
+    }
+    if(!affected) return;
+    app.savedWindows.erase(window);
+    if(app.dragWindow==window) app.dragWindow=nullptr;
+    if(app.pendingDynamicWindow==window) app.pendingDynamicWindow=nullptr;
+    if(app.dynamicGuideOverlay)
+        InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
+}
