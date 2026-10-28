@@ -232,10 +232,21 @@ bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
     if(it==app.dynamicTrees.end()) return false;
     Edge edge;
     FindEdge(it->second,it->second.root,WorkForPoint(cursor),cursor,edge);
-    if(edge.index<0) return false;
+    if(edge.index<0) {
+        wchar_t log[256]{};
+        swprintf_s(log,L"[ZoneSmith divider] MISS x=%ld y=%ld root=%d\\n",
+                   cursor.x,cursor.y,it->second.root);
+        OutputDebugStringW(log);
+        return false;
+    }
     app.dynamicDividerMonitor=key;
     app.dynamicDividerNode=edge.index;
     app.dynamicDividerBounds=edge.rect;
+    ++app.dynamicDividerCaptureCount;
+    wchar_t log[256]{};
+    swprintf_s(log,L"[ZoneSmith divider] CAPTURE node=%d x=%ld y=%ld tolerance=12\\n",
+               edge.index,cursor.x,cursor.y);
+    OutputDebugStringW(log);
     return true;
 }
 bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
@@ -250,10 +261,22 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     // The monitor is stable for a divider drag, even if the cursor leaves it.
     POINT middle{(app.dynamicDividerBounds.left+app.dynamicDividerBounds.right)/2,
                  (app.dynamicDividerBounds.top+app.dynamicDividerBounds.bottom)/2};
+    app.dynamicDividerApplying=true;
     Reflow(it->second,it->second.root,WorkForPoint(middle),app.snapPadding);
+    app.dynamicDividerApplying=false;
+    ++app.dynamicDividerApplyCount;
+    wchar_t log[256]{};
+    swprintf_s(log,L"[ZoneSmith divider] APPLY node=%d ratio=%.3f moves=%u applies=%u\\n",
+               app.dynamicDividerNode,n.ratio,app.dynamicDividerMoveCount,app.dynamicDividerApplyCount);
+    OutputDebugStringW(log);
     return true;
 }
 void EndDynamicDividerDrag(AppState& app) {
+    wchar_t log[256]{};
+    swprintf_s(log,L"[ZoneSmith divider] END captures=%u misses=%u moves=%u applies=%u\\n",
+               app.dynamicDividerCaptureCount,app.dynamicDividerMissCount,
+               app.dynamicDividerMoveCount,app.dynamicDividerApplyCount);
+    OutputDebugStringW(log);
     app.dynamicDividerNode=-1;
     app.dynamicDividerMonitor.clear();
 }
