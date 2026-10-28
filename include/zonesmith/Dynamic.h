@@ -15,3 +15,6 @@ bool DetachDynamicWindow(AppState& app, HWND window);
 bool IsNearDynamicDivider(const AppState& app, POINT cursor);
 void ShowDynamicDividerGuides(AppState& app, bool enabled);
 void DestroyDynamicDividerGuides(AppState& app);
+
+// Periodic lifecycle handling: preserve split positions across minimize/restore.
+void ReconcileDynamicWindowStates(AppState& app);
