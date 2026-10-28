@@ -2,6 +2,7 @@
 
 #include "Overlay.h"
 #include "Dynamic.h"
+#include "Config.h"
 #include "Snap.h"
 #include "WindowCycle.h"
 #include "WindowUtils.h"
