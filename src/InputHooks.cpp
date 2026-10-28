@@ -104,8 +104,8 @@ LRESULT CALLBACK MouseHook(
     }
     // Resize modifiers must never accidentally trigger a window drag/snap.
     if(message == WM_LBUTTONDOWN &&
-       (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
-       (GetAsyncKeyState(VK_MENU)&0x8000) &&
+       (app.dynamicCtrlDown || (GetAsyncKeyState(VK_CONTROL)&0x8000)) &&
+       (app.dynamicAltDown || (GetAsyncKeyState(VK_MENU)&0x8000)) &&
        StartDynamicDividerDrag(app,event->pt)) {
         UpdateDynamicDividerGuides(app,true);
         app.dragWindow=nullptr;
@@ -593,6 +593,8 @@ LRESULT CALLBACK KeyboardHook(
     const bool altEvent=event->vkCode==VK_MENU ||
         event->vkCode==VK_LMENU || event->vkCode==VK_RMENU;
     if(ctrlEvent || altEvent) {
+        if(ctrlEvent) app.dynamicCtrlDown=keyDown;
+        if(altEvent) app.dynamicAltDown=keyDown;
         const bool ctrl=ctrlEvent ? keyDown : (GetAsyncKeyState(VK_CONTROL)&0x8000)!=0;
         const bool alt=altEvent ? keyDown : (GetAsyncKeyState(VK_MENU)&0x8000)!=0;
         UpdateDynamicDividerGuides(app,ctrl && alt);
