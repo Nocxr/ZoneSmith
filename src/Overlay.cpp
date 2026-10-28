@@ -175,7 +175,9 @@ unsigned int ZonesAt(
 ) {
     if(IsDynamicLayout(app)) {
         RECT work=app.monitorWork;
-        return PtInRect(&work,point) ? 1u : 0u;
+        if(!PtInRect(&work,point)) return 0u;
+        const RECT preview=DynamicPreview(app,point);
+        return preview.right>preview.left && preview.bottom>preview.top ? 1u : 0u;
     }
     const RECT& selectionArea =
         app.compactMode
@@ -798,6 +800,29 @@ void PaintOverlay(
                 number.size()
             )
         );
+    }
+
+    // Display every proposed slot, not only the incoming window's target.
+    // All rectangles derive from the same layout transaction used on drop.
+    if(IsDynamicLayout(app)) {
+        const RECT work=app.monitorWork;
+        const auto slots=DynamicPreviewSlots(app,app.cursor);
+        HPEN outline=CreatePen(PS_SOLID,3,RGB(190,229,255));
+        HPEN previous=static_cast<HPEN>(SelectObject(dc,outline));
+        HBRUSH old=static_cast<HBRUSH>(SelectObject(dc,GetStockObject(NULL_BRUSH)));
+        const double sx=width/std::max(1L,work.right-work.left);
+        const double sy=height/std::max(1L,work.bottom-work.top);
+        for(const auto& slot:slots) {
+            const int left=static_cast<int>((slot.left-work.left)*sx)+3;
+            const int top=static_cast<int>((slot.top-work.top)*sy)+3;
+            const int right=static_cast<int>((slot.right-work.left)*sx)-3;
+            const int bottom=static_cast<int>((slot.bottom-work.top)*sy)-3;
+            if(right>left && bottom>top)
+                Rectangle(dc,left,top,right,bottom);
+        }
+        SelectObject(dc,old);
+        SelectObject(dc,previous);
+        DeleteObject(outline);
     }
 
     HFONT labelFont =
