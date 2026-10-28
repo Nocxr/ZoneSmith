@@ -34,3 +34,16 @@ on top of applications. Divider ratios persist while the app runs, but window
 membership and split ratios are not yet saved across ZoneSmith restarts.
 Closed windows are pruned when the next window is docked. Static layouts
 and their persistence are unaffected.
+
+### Dynamic POC input / lifecycle updates
+
+While **Ctrl+Alt** are held, the dynamic split boundaries are displayed as
+click-through cyan guide bars. The selected bar turns amber while dragging.
+Ctrl+Alt+left-drag a highlighted bar to resize; window placement shortcuts are
+suppressed during this gesture. Divider resize work is queued on ZoneSmith's
+window thread rather than executed inside the low-level mouse hook.
+
+Closing a tiled window immediately removes its leaf from the split tree and
+reflows the surviving windows. The last remaining tile fills the monitor work
+area. If an application enforces a large minimum window size, Windows may
+still limit its actual resized geometry.
