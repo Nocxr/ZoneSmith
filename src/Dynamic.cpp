@@ -130,35 +130,45 @@ struct Placement {
     bool swap{};
     bool vertical{};
     bool before{};
+    double ratio{0.5};
     int leaf{-1};
     RECT destination{};
 };
 Placement ResolvePlacement(const Tree& tree,RECT work,POINT point) {
     if(!PtInRect(&work,point)) return {};
-    if(tree.root<0) return {true,false,false,true,true,-1,work};
+    if(tree.root<0) return {true,false,false,true,true,0.5,-1,work};
     const double x=double(point.x-work.left)/std::max(1L,work.right-work.left);
     const double y=double(point.y-work.top)/std::max(1L,work.bottom-work.top);
-    const double edge=std::min({x,1.0-x,y,1.0-y});
-    if(edge<=0.08) {
-        const bool vertical=std::min(x,1.0-x)<=std::min(y,1.0-y);
-        const bool before=vertical?x<0.5:y<0.5;
+    // The horizontal monitor-wide zones are intentionally generous: users
+    // should be able to create a full-width bottom/top row without aiming at
+    // the last few pixels or accidentally splitting a narrow child tile.
+    const bool bottom=y>=0.80;
+    const bool top=y<=0.15;
+    const bool left=!top && !bottom && x<=0.12;
+    const bool right=!top && !bottom && x>=0.88;
+    if(bottom || top || left || right) {
+        const bool vertical=left || right;
+        const bool before=top || left;
+        const double ratio=bottom?0.75:top?0.25:left?0.25:0.75;
         RECT destination=work;
         if(vertical) {
-            LONG mid=(work.left+work.right)/2;
+            LONG mid=work.left+static_cast<LONG>(
+                std::lround((work.right-work.left)*ratio));
             if(before) destination.right=mid;
             else destination.left=mid;
         } else {
-            LONG mid=(work.top+work.bottom)/2;
+            LONG mid=work.top+static_cast<LONG>(
+                std::lround((work.bottom-work.top)*ratio));
             if(before) destination.bottom=mid;
             else destination.top=mid;
         }
-        return {true,true,false,vertical,before,-1,destination};
+        return {true,true,false,vertical,before,ratio,-1,destination};
     }
     const auto leaf=FindLeaf(tree,tree.root,work,point);
     if(leaf.index<0) return {};
     const auto drop=ChooseDrop(leaf.rect,point);
     if(drop.valid)
-        return {true,false,false,drop.vertical,drop.before,leaf.index,drop.preview};
+        return {true,false,false,drop.vertical,drop.before,0.5,leaf.index,drop.preview};
     // Center swaps need an explicit occupied source slot. For this first
     // placement pass, do not evict an unrelated occupant on a center drop.
     return {};
@@ -189,7 +199,7 @@ bool ApplyPlacement(Tree& tree,HWND window,RECT work,POINT point) {
     const DynamicNode split{nullptr,
         placement.before?newLeaf:previousCopy,
         placement.before?previousCopy:newLeaf,
-        placement.vertical,0.5};
+        placement.vertical,placement.ratio};
     if(placement.rootSplit) {
         tree.nodes.push_back(split);
         tree.root=static_cast<int>(tree.nodes.size())-1;
