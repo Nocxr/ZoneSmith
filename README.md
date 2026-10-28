@@ -47,3 +47,12 @@ Closing a tiled window immediately removes its leaf from the split tree and
 reflows the surviving windows. The last remaining tile fills the monitor work
 area. If an application enforces a large minimum window size, Windows may
 still limit its actual resized geometry.
+
+### Automatic tile reclamation
+
+The Dynamic mode periodically reconciles its occupied leaves every 750 ms.
+Closed and minimized windows are removed from the active tree; other tiled
+windows are reflowed using the owning monitor's work area, not the position
+of a potentially moved survivor. This is a safety net for missed Windows
+destroy notifications. Minimized windows are no longer part of that active
+tiling session; restore and explicitly dock them again when needed.
