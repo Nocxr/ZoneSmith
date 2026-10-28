@@ -347,8 +347,10 @@ LRESULT CALLBACK MouseHook(
         message ==
         WM_LBUTTONDOWN
     ) {
-        app.leftDown =
-            true;
+        app.leftDown = true;
+        HWND hit=GetAncestor(WindowFromPoint(event->pt),GA_ROOT);
+        app.dynamicTitleDragCandidate =
+            hit && IsPointOnWindowTitleBar(app,hit,event->pt) ? hit : nullptr;
     }
 
     else if (
@@ -554,11 +556,9 @@ LRESULT CALLBACK MouseHook(
 
         HideOverlay(app);
 
-        app.leftDown =
-            false;
-
-        app.dragWindow =
-            nullptr;
+        app.leftDown = false;
+        app.dynamicTitleDragCandidate=nullptr;
+        app.dragWindow = nullptr;
 
         app.restoreOnReleaseWindow =
             nullptr;
@@ -946,7 +946,7 @@ void CALLBACK MoveSizeEventHook(
             );
         app.dynamicDragOrigin=app.cursor;
         app.dynamicDragDetached=false;
-        app.dynamicDragIsMove=IsPointOnWindowTitleBar(app,app.dragWindow,app.cursor);
+        app.dynamicDragIsMove=app.dynamicTitleDragCandidate==app.dragWindow;
 
         app.restoreOnReleaseWindow =
             app.savedWindows.contains(
@@ -954,6 +954,15 @@ void CALLBACK MoveSizeEventHook(
             )
                 ? app.dragWindow
                 : nullptr;
+        // Resizing a border is not a docking gesture.
+        // The original mouse-down must have started on this window's title bar.
+        SelectMonitor(app,app.cursor);
+        if(IsDynamicLayout(app) && !app.dynamicDragIsMove) {
+            app.dragWindow=nullptr;
+            app.restoreOnReleaseWindow=nullptr;
+            HideOverlay(app);
+            return;
+        }
         // Dynamic mode uses the existing window drag itself as the dock gesture.
         // Do not require an additional right-click to expose its drop preview.
         SelectMonitor(app, app.cursor);
@@ -968,9 +977,8 @@ void CALLBACK MoveSizeEventHook(
             EVENT_SYSTEM_MOVESIZEEND &&
         !app.leftDown
     ) {
-        app.dragWindow =
-            nullptr;
-
+        app.dragWindow = nullptr;
+        app.dynamicTitleDragCandidate=nullptr;
         HideOverlay(app);
     }
 }
