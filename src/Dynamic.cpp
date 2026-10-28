@@ -76,6 +76,48 @@ void FindEdge(const Tree& tree,int index,RECT rect,POINT point,Edge& found) {
     FindEdge(tree,n.first,a,point,found);
     FindEdge(tree,n.second,b,point,found);
 }
+// The guide window never receives input. Black is the transparent color key.
+constexpr wchar_t kGuideClass[]=L"ZoneSmithDynamicGuides";
+void PaintSplitGuides(HDC dc,const Tree& tree,int index,RECT area,POINT origin,int active) {
+    if(index<0) return;
+    const auto& n=tree.nodes[index];
+    if(!HasChildren(n)) return;
+    auto [a,b]=Divide(area,n);
+    RECT bar{};
+    if(n.vertical) {
+        bar={a.right-3,area.top+8,a.right+3,area.bottom-8};
+    } else {
+        bar={area.left+8,a.bottom-3,area.right-8,a.bottom+3};
+    }
+    OffsetRect(&bar,-origin.x,-origin.y);
+    HBRUSH brush=CreateSolidBrush(index==active?RGB(255,198,64):RGB(20,205,240));
+    FillRect(dc,&bar,brush);
+    DeleteObject(brush);
+    PaintSplitGuides(dc,tree,n.first,a,origin,active);
+    PaintSplitGuides(dc,tree,n.second,b,origin,active);
+}
+LRESULT CALLBACK GuideProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
+    if(message==WM_NCHITTEST) return HTTRANSPARENT;
+    if(message==WM_ERASEBKGND) return 1;
+    if(message==WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc=BeginPaint(hwnd,&ps);
+        RECT client{};
+        GetClientRect(hwnd,&client);
+        FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        auto* app=reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
+        if(app) {
+            RECT monitor=app->monitorWork;
+            auto tree=app->dynamicTrees.find(app->currentMonitorKey);
+            if(tree!=app->dynamicTrees.end())
+                PaintSplitGuides(dc,tree->second,tree->second.root,monitor,
+                                 POINT{monitor.left,monitor.top},app->dynamicDividerNode);
+        }
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd,message,wp,lp);
+}
 RECT WorkForPoint(POINT point) {
     MONITORINFO info{sizeof(info)};
     GetMonitorInfoW(MonitorFromPoint(point,MONITOR_DEFAULTTONEAREST),&info);
@@ -246,14 +288,63 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     int span=std::max(1,Extent(app.dynamicDividerBounds,n.vertical));
     int origin=n.vertical?app.dynamicDividerBounds.left:app.dynamicDividerBounds.top;
     int position=n.vertical?cursor.x:cursor.y;
-    n.ratio=std::clamp(double(position-origin)/span,0.15,0.85);
+    // Respect practical minimum widths/heights instead of asking Windows to
+    // repeatedly enforce the application's minimum tracking size.
+    const double minRatio=std::min(0.45, 240.0/span);
+    n.ratio=std::clamp(double(position-origin)/span,minRatio,1.0-minRatio);
     // The monitor is stable for a divider drag, even if the cursor leaves it.
     POINT middle{(app.dynamicDividerBounds.left+app.dynamicDividerBounds.right)/2,
                  (app.dynamicDividerBounds.top+app.dynamicDividerBounds.bottom)/2};
     Reflow(it->second,it->second.root,WorkForPoint(middle),app.snapPadding);
+    if(app.dynamicGuideOverlay) InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
     return true;
 }
 void EndDynamicDividerDrag(AppState& app) {
     app.dynamicDividerNode=-1;
     app.dynamicDividerMonitor.clear();
+}
+
+void UpdateDynamicDividerGuides(AppState& app,bool enabled) {
+    if(!enabled || app.paused || !IsDynamicLayout(app) || !app.overlay) {
+        app.dynamicGuidesVisible=false;
+        if(app.dynamicGuideOverlay) ShowWindow(app.dynamicGuideOverlay,SW_HIDE);
+        return;
+    }
+    if(!app.dynamicGuideOverlay) {
+        WNDCLASSW cls{};
+        cls.hInstance=app.instance;
+        cls.lpfnWndProc=GuideProc;
+        cls.lpszClassName=kGuideClass;
+        cls.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        RegisterClassW(&cls);
+        app.dynamicGuideOverlay=CreateWindowExW(
+            WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE,
+            kGuideClass,L"",WS_POPUP,0,0,1,1,nullptr,nullptr,app.instance,nullptr);
+        if(!app.dynamicGuideOverlay) return;
+        SetWindowLongPtrW(app.dynamicGuideOverlay,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(&app));
+        SetLayeredWindowAttributes(app.dynamicGuideOverlay,RGB(0,0,0),0,LWA_COLORKEY);
+    }
+    RECT work=WorkForPoint(app.cursor);
+    // Synchronize the selected monitor so the guide renderer uses its tree.
+    // Only read the monitor key; do not change persisted layout selections.
+    auto key=KeyForPoint(app.cursor);
+    auto selected=app.monitorLayouts.find(key);
+    if(selected!=app.monitorLayouts.end() && selected->second!=L"Dynamic") {
+        ShowWindow(app.dynamicGuideOverlay,SW_HIDE);
+        return;
+    }
+    app.monitorWork=work;
+    app.currentMonitorKey=key;
+    app.dynamicGuidesVisible=true;
+    SetWindowPos(app.dynamicGuideOverlay,HWND_TOPMOST,work.left,work.top,
+        work.right-work.left,work.bottom-work.top,
+        SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
+}
+void DestroyDynamicDividerGuides(AppState& app) {
+    if(app.dynamicGuideOverlay) {
+        DestroyWindow(app.dynamicGuideOverlay);
+        app.dynamicGuideOverlay=nullptr;
+    }
+    if(app.instance) UnregisterClassW(kGuideClass,app.instance);
 }
