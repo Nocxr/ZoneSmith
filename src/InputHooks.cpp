@@ -331,6 +331,14 @@ LRESULT CALLBACK MouseHook(
             WM_MOUSEMOVE &&
         app.leftDown
     ) {
+        if(app.dragWindow && app.dynamicDragIsMove && !app.dynamicDragDetached) {
+            const int dx=event->pt.x-app.dynamicDragOrigin.x;
+            const int dy=event->pt.y-app.dynamicDragOrigin.y;
+            if(dx*dx+dy*dy>144) {
+                DetachDynamicWindow(app,app.dragWindow);
+                app.dynamicDragDetached=true;
+            }
+        }
         if (app.dragWindow && !app.overlayVisible) {
             SelectMonitor(app,event->pt);
             if (IsDynamicLayout(app)) ShowOverlay(app,event->pt);
@@ -887,6 +895,9 @@ void CALLBACK MoveSizeEventHook(
                 window,
                 GA_ROOT
             );
+        app.dynamicDragOrigin=app.cursor;
+        app.dynamicDragDetached=false;
+        app.dynamicDragIsMove=IsPointOnWindowTitleBar(app,app.dragWindow,app.cursor);
 
         app.restoreOnReleaseWindow =
             app.savedWindows.contains(
