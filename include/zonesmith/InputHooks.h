@@ -23,3 +23,4 @@ void CALLBACK MoveSizeEventHook(
     DWORD eventThread,
     DWORD eventTime
 );
+void CALLBACK DynamicWindowDestroyHook(HWINEVENTHOOK,DWORD,HWND,LONG,LONG,DWORD,DWORD);
