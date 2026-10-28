@@ -28,6 +28,60 @@ RECT VisibleWindowRect(HWND window) {
     return rect;
 }
 
+void SetVisibleWindowRect(
+    HWND window,
+    const RECT& target
+) {
+    const HMONITOR monitorBefore =
+        MonitorFromWindow(
+            window,
+            MONITOR_DEFAULTTONEAREST
+        );
+
+    //
+    // A second pass is only needed when the window changed monitors: its
+    // frame margins scale with the new monitor's DPI.
+    //
+    for (int pass = 0; pass < 2; ++pass) {
+        RECT outer{};
+        GetWindowRect(
+            window,
+            &outer
+        );
+
+        const RECT visible =
+            VisibleWindowRect(window);
+
+        const RECT placed{
+            target.left - (visible.left - outer.left),
+            target.top - (visible.top - outer.top),
+            target.right + (outer.right - visible.right),
+            target.bottom + (outer.bottom - visible.bottom)
+        };
+
+        SetWindowPos(
+            window,
+            nullptr,
+            placed.left,
+            placed.top,
+            std::max(1L, placed.right - placed.left),
+            std::max(1L, placed.bottom - placed.top),
+            SWP_NOACTIVATE |
+                SWP_NOZORDER |
+                SWP_NOOWNERZORDER
+        );
+
+        if (
+            MonitorFromWindow(
+                window,
+                MONITOR_DEFAULTTONEAREST
+            ) == monitorBefore
+        ) {
+            break;
+        }
+    }
+}
+
 std::wstring WindowExecutableName(
     HWND window
 ) {

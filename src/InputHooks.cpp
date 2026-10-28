@@ -307,7 +307,6 @@ LRESULT CALLBACK MouseHook(
     if(app.dynamicDividerNode>=0) {
         if(message==WM_MOUSEMOVE) {
             app.dynamicDividerLatest=event->pt;
-            ++app.dynamicDividerMoveCount;
             if(!app.dynamicDividerMoveQueued) {
                 app.dynamicDividerMoveQueued=true;
                 PostMessageW(app.overlay,kDividerMoveMessage,0,0);
@@ -330,7 +329,6 @@ LRESULT CALLBACK MouseHook(
             app.leftDown=false;
             return 1;
         }
-        ++app.dynamicDividerMissCount;
     }
     // Normal drag / zone behavior
     // ------------------------------------------------------------
@@ -360,6 +358,7 @@ LRESULT CALLBACK MouseHook(
             app.dynamicDragIsMove &&
             !app.overlayVisible &&
             !app.dynamicOverlayDismissed &&
+            !app.dynamicDragCancelled &&
             IsDynamicMonitorAt(app, event->pt)
         ) {
             ShowOverlay(app, event->pt);
@@ -528,6 +527,7 @@ LRESULT CALLBACK MouseHook(
                 0;
 
             app.dynamicOverlayDismissed = false;
+            app.dynamicDragCancelled = false;
 
             ShowOverlay(
                 app,
@@ -582,7 +582,11 @@ LRESULT CALLBACK MouseHook(
             !dynamicDrop &&
             IsDynamicTiled(app, app.dragWindow)
         ) {
-            QueueDynamicUndock(app, app.dragWindow);
+            if (app.dynamicDragCancelled) {
+                QueueDynamicReturn(app, app.dragWindow);
+            } else {
+                QueueDynamicUndock(app, app.dragWindow);
+            }
         }
 
         else if (
@@ -916,6 +920,22 @@ LRESULT CALLBACK KeyboardHook(
         }
     }
 
+    //
+    // Escape cancels a Dynamic drop: nothing in the layout changes and a
+    // tiled window goes back to its tile. With the overlay hidden, Escape
+    // also reaches Windows, which cancels the move itself.
+    //
+    if (
+        keyDown &&
+        event->vkCode == VK_ESCAPE &&
+        app.leftDown &&
+        app.dragWindow &&
+        app.dynamicDragIsMove
+    ) {
+        app.dynamicDragCancelled = true;
+        app.dynamicPreview = {};
+    }
+
     if (
         keyDown &&
         event->vkCode ==
@@ -962,6 +982,15 @@ void CALLBACK MoveSizeEventHook(
     }
 
     if (
+        event == EVENT_SYSTEM_MOVESIZEEND &&
+        app.dynamicResizeWindow &&
+        GetAncestor(window, GA_ROOT) == app.dynamicResizeWindow
+    ) {
+        QueueDynamicResize(app, app.dynamicResizeWindow);
+        app.dynamicResizeWindow = nullptr;
+    }
+
+    if (
         event ==
         EVENT_SYSTEM_MOVESIZESTART
     ) {
@@ -1000,6 +1029,16 @@ void CALLBACK MoveSizeEventHook(
             )
                 ? app.dragWindow
                 : nullptr;
+        //
+        // Resizing a tiled window's border is not a docking gesture, but
+        // the dividers it touches follow it when it is released.
+        //
+        app.dynamicResizeWindow =
+            !app.dynamicDragIsMove &&
+            IsDynamicTiled(app, app.dragWindow)
+                ? app.dragWindow
+                : nullptr;
+
         // Resizing a border is not a docking gesture.
         // The original mouse-down must have started on this window's title bar.
         SelectMonitor(app,app.cursor);

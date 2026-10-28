@@ -1,4 +1,5 @@
 #include "Dynamic.h"
+#include "Config.h"
 #include "WindowUtils.h"
 
 #include <dwmapi.h>
@@ -74,22 +75,66 @@ bool IsHiddenWindow(WindowId id) {
 
 zsdyn::Tree OnScreen(const zsdyn::Tree& tree) { return zsdyn::Visible(tree, IsHiddenWindow); }
 
+RECT PaddedTile(const AppState& app, const zsdyn::Rect& tile) {
+    const RECT bounds = ToWin(tile);
+    RECT target = bounds;
+    InflateRect(&target,
+                -std::min(app.snapPadding, static_cast<int>((bounds.right - bounds.left - 1) / 2)),
+                -std::min(app.snapPadding, static_cast<int>((bounds.bottom - bounds.top - 1) / 2)));
+    return target;
+}
+
 void Place(AppState& app, const std::vector<zsdyn::WindowPlacement>& placements) {
     app.dynamicReflowApplying = true;
     for (const auto& placement : placements) {
         const HWND window = Hwnd(placement.window);
         if (!IsWindow(window) || IsIconic(window)) continue;
-        const RECT bounds = ToWin(placement.rect);
-        RECT target = bounds;
-        InflateRect(&target,
-                    -std::min(app.snapPadding, static_cast<int>((bounds.right - bounds.left - 1) / 2)),
-                    -std::min(app.snapPadding, static_cast<int>((bounds.bottom - bounds.top - 1) / 2)));
+        const RECT target = PaddedTile(app, placement.rect);
         if (IsZoomed(window)) ShowWindow(window, SW_RESTORE);
-        SetWindowPos(window, nullptr, target.left, target.top,
-                     std::max(1L, target.right - target.left), std::max(1L, target.bottom - target.top),
-                     SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        SetVisibleWindowRect(window, target);
+        // A window that stays larger than its tile has told us its minimum
+        // size; later previews and divider drags respect it.
+        const RECT actual = VisibleWindowRect(window);
+        const LONG width = actual.right - actual.left;
+        const LONG height = actual.bottom - actual.top;
+        const bool wider = width > target.right - target.left + 2;
+        const bool taller = height > target.bottom - target.top + 2;
+        if (wider || taller) {
+            SIZE& minimum = app.dynamicMinSizes[window];
+            if (wider) minimum.cx = std::max(minimum.cx, width);
+            if (taller) minimum.cy = std::max(minimum.cy, height);
+        }
     }
     app.dynamicReflowApplying = false;
+}
+
+zsdyn::Size MinimumSize(const AppState& app, WindowId id) {
+    zsdyn::Size size{GetSystemMetrics(SM_CXMINTRACK), GetSystemMetrics(SM_CYMINTRACK)};
+    if (const auto it = app.dynamicMinSizes.find(Hwnd(id)); it != app.dynamicMinSizes.end()) {
+        size.width = std::max(size.width, static_cast<long>(it->second.cx));
+        size.height = std::max(size.height, static_cast<long>(it->second.cy));
+    }
+    return size;
+}
+
+// Windows the change would squeeze below their minimum size that were not
+// already too small before it.
+std::vector<WindowId> NewlyTooSmall(const AppState& app, const zsdyn::Tree& before,
+                                    const zsdyn::Tree& after, const zsdyn::Rect& work) {
+    const auto minimum = [&](WindowId id) { return MinimumSize(app, id); };
+    const auto old = zsdyn::TooSmall(before, work, app.snapPadding, minimum);
+    std::vector<WindowId> out;
+    for (WindowId w : zsdyn::TooSmall(after, work, app.snapPadding, minimum))
+        if (std::find(old.begin(), old.end(), w) == old.end()) out.push_back(w);
+    return out;
+}
+
+std::wstring WindowIdentity(HWND window) {
+    wchar_t className[256]{};
+    GetClassNameW(window, className, 256);
+    wchar_t title[512]{};
+    GetWindowTextW(window, title, 512);
+    return Lowercase(WindowExecutableName(window)) + L"\t" + className + L"\t" + title;
 }
 
 // Moves windows only when the on-screen layout differs from what was last
@@ -153,6 +198,12 @@ DynamicDropPlan PlanDrop(const AppState& app, HWND window, POINT point, int opti
         return plan;
     }
 
+    const auto squeezed = NewlyTooSmall(app, OnScreen(full), OnScreen(result->tree), ToModel(work));
+    if (!squeezed.empty()) {
+        const std::wstring name = WindowExecutableName(Hwnd(squeezed.front()));
+        plan.blocked = L"Too small for " + (name.empty() ? std::wstring(L"a window") : name);
+    }
+
     plan.valid = true;
     plan.key = key;
     plan.work = ToModel(work);
@@ -176,7 +227,7 @@ bool SamePreview(const DynamicDropPlan& a, const DynamicDropPlan& b) {
     return a.key == b.key && a.optionIndex == b.optionIndex && a.optionCount == b.optionCount &&
            a.option.kind == b.option.kind && a.option.node == b.option.node &&
            a.option.side == b.option.side && a.option.scope == b.option.scope &&
-           a.result == b.result;
+           a.blocked == b.blocked && a.result == b.result;
 }
 
 void Commit(AppState& app, const DynamicDropPlan& plan) {
@@ -221,6 +272,7 @@ void BeginDynamicDrag(AppState& app, HWND window, bool titleBarMove) {
     if (window) GetWindowRect(window, &rect);
     app.dynamicDragStartSize = {rect.right - rect.left, rect.bottom - rect.top};
     app.dynamicOverlayDismissed = false;
+    app.dynamicDragCancelled = false;
     app.dynamicOptionIndex = 0;
     app.dynamicOptionContext.clear();
     app.dynamicPreview = {};
@@ -275,7 +327,49 @@ void QueueDynamicUndock(AppState& app, HWND window) {
     SetTimer(app.overlay, kSnapTimerId, 75, nullptr);
 }
 
+void QueueDynamicReturn(AppState& app, HWND window) {
+    app.pendingDynamicDrop = {};
+    app.pendingDynamicDrop.window = window;
+    SetTimer(app.overlay, kSnapTimerId, 75, nullptr);
+}
+
+void QueueDynamicResize(AppState& app, HWND window) {
+    app.pendingDynamicResize = window;
+    SetTimer(app.overlay, kSnapTimerId, 75, nullptr);
+}
+
 bool ApplyPendingDynamicOperation(AppState& app) {
+    if (const HWND window = std::exchange(app.pendingDynamicResize, nullptr); window && IsWindow(window)) {
+        for (auto& [key, state] : app.dynamicMonitors) {
+            RECT work{};
+            if (!zsdyn::Contains(state.tree, Id(window)) || !IsDynamicKey(app, key) || !WorkForKey(key, work))
+                continue;
+            const zsdyn::Tree visible = OnScreen(state.tree);
+            const RECT actual = VisibleWindowRect(window);
+            RECT expected{};
+            for (const auto& leaf : zsdyn::Leaves(visible, ToModel(work)))
+                if (std::find(leaf.windows.begin(), leaf.windows.end(), Id(window)) != leaf.windows.end())
+                    expected = PaddedTile(app, leaf.rect);
+            // Same size as its tile means it was moved (e.g. from the
+            // keyboard), not resized: just put it back.
+            const bool resized =
+                std::abs((actual.right - actual.left) - (expected.right - expected.left)) > 3 ||
+                std::abs((actual.bottom - actual.top) - (expected.bottom - expected.top)) > 3;
+            if (resized) {
+                // Undo the padding so the edges are in tile coordinates.
+                const zsdyn::Rect edges{actual.left - app.snapPadding, actual.top - app.snapPadding,
+                                        actual.right + app.snapPadding, actual.bottom + app.snapPadding};
+                auto updated = zsdyn::ResizeTile(state.tree, visible, ToModel(work), Id(window), edges);
+                if (updated && NewlyTooSmall(app, visible, OnScreen(*updated), ToModel(work)).empty() &&
+                    !(*updated == state.tree)) {
+                    state.tree = std::move(*updated);
+                    ++state.revision;
+                }
+            }
+            ReflowMonitor(app, key, true);
+        }
+    }
+
     if (const HWND window = std::exchange(app.pendingDynamicUndock, nullptr)) {
         for (auto& [key, state] : app.dynamicMonitors) {
             if (!zsdyn::Contains(state.tree, Id(window))) continue;
@@ -287,7 +381,7 @@ bool ApplyPendingDynamicOperation(AppState& app) {
 
     const DynamicDropPlan plan = std::exchange(app.pendingDynamicDrop, {});
     if (!plan.window) return false;
-    if (plan.valid) {
+    if (plan.valid && plan.blocked.empty()) {
         Commit(app, plan);
     } else {
         for (const auto& [key, state] : app.dynamicMonitors)
@@ -381,9 +475,26 @@ void PaintDynamicOverlay(const AppState& app, HDC dc, RECT client) {
             std::find(leaf.windows.begin(), leaf.windows.end(), dragged) != leaf.windows.end();
         const RECT r = toClient(leaf.rect, 6);
         if (incoming) destination = r;
-        fill(r, incoming ? ScopeColor(plan.option) : RGB(65, 79, 105));
+        const COLORREF accent = plan.blocked.empty() ? ScopeColor(plan.option) : RGB(200, 60, 60);
+        fill(r, incoming ? accent : RGB(65, 79, 105));
         frame(r, incoming ? RGB(235, 245, 255) : RGB(135, 155, 185), incoming ? 4 : 2);
     }
+
+    // Stacked tiles say how many windows share them.
+    HFONT stackFont = CreateFontW(app.compactMode ? 12 : 18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HFONT previousFont = static_cast<HFONT>(SelectObject(dc, stackFont));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(220, 230, 245));
+    for (const auto& leaf : leaves) {
+        if (leaf.windows.size() < 2) continue;
+        RECT label = toClient(leaf.rect, 12);
+        const std::wstring text = std::to_wstring(leaf.windows.size()) + L" stacked";
+        DrawTextW(dc, text.c_str(), -1, &label, DT_CENTER | DT_TOP | DT_SINGLELINE);
+    }
+    SelectObject(dc, previousFont);
+    DeleteObject(stackFont);
     if (!valid) return;
 
     // The region the chosen option acts on, in today's geometry, so a split
@@ -395,7 +506,7 @@ void PaintDynamicOverlay(const AppState& app, HDC dc, RECT client) {
             leaf.rect.top >= s.top && leaf.rect.bottom <= s.bottom)
             ++tilesInScope;
     }
-    frame(toClient(plan.option.scope, 2), ScopeColor(plan.option), 6);
+    frame(toClient(plan.option.scope, 2), plan.blocked.empty() ? ScopeColor(plan.option) : RGB(200, 60, 60), 6);
 
     HFONT titleFont = CreateFontW(app.compactMode ? 16 : 30, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -408,7 +519,7 @@ void PaintDynamicOverlay(const AppState& app, HDC dc, RECT client) {
     SetTextColor(dc, RGB(255, 255, 255));
     SetTextAlign(dc, TA_LEFT | TA_TOP);
 
-    const std::wstring title = OptionTitle(plan.option, tilesInScope);
+    const std::wstring title = plan.blocked.empty() ? OptionTitle(plan.option, tilesInScope) : plan.blocked;
     RECT text = destination;
     const int centreY = (destination.top + destination.bottom) / 2;
     text.top = centreY - (app.compactMode ? 18 : 34);
@@ -441,7 +552,6 @@ bool StartDynamicDividerDrag(AppState& app, POINT cursor) {
     app.dynamicDividerMonitor = key;
     app.dynamicDividerNode = divider->id;
     app.dynamicDividerBounds = ToWin(divider->bounds);
-    ++app.dynamicDividerCaptureCount;
     if (app.dividerGuideWindow) InvalidateRect(app.dividerGuideWindow, nullptr, FALSE);
     return true;
 }
@@ -460,12 +570,16 @@ bool MoveDynamicDividerDrag(AppState& app, POINT cursor) {
     auto updated = zsdyn::SetRatio(it->second.tree, app.dynamicDividerNode,
                                    static_cast<double>(position - origin) / span);
     if (!updated) return false;
+    RECT work{};
+    if (!WorkForKey(app.dynamicDividerMonitor, work)) return false;
+    // Stop at the last position that keeps every window at its minimum size.
+    if (!NewlyTooSmall(app, OnScreen(it->second.tree), OnScreen(*updated), ToModel(work)).empty())
+        return false;
     it->second.tree = std::move(*updated);
     ++it->second.revision;
     app.dynamicDividerApplying = true;
     ReflowMonitor(app, app.dynamicDividerMonitor, true);
     app.dynamicDividerApplying = false;
-    ++app.dynamicDividerApplyCount;
     return true;
 }
 
@@ -483,9 +597,13 @@ LRESULT CALLBACK DividerGuideProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     if (message == WM_ERASEBKGND) return 1;
     if (message == WM_PAINT) {
         PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd, &ps);
+        HDC screen = BeginPaint(hwnd, &ps);
         RECT client{};
         GetClientRect(hwnd, &client);
+        // Compose off-screen; black is the layered window's transparent key.
+        HDC dc = CreateCompatibleDC(screen);
+        HBITMAP frame = CreateCompatibleBitmap(screen, std::max(1L, client.right), std::max(1L, client.bottom));
+        HGDIOBJ oldFrame = SelectObject(dc, frame);
         FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         const auto* app = reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         RECT bounds{};
@@ -504,8 +622,33 @@ LRESULT CALLBACK DividerGuideProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
                     FillRect(dc, &bar, brush);
                     DeleteObject(brush);
                 }
+                // Badge stacked tiles with their window count. No
+                // anti-aliasing: blended edge pixels would show against the
+                // colour key.
+                HFONT font = CreateFontW(20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                                         DEFAULT_PITCH, L"Segoe UI");
+                HFONT oldFont = static_cast<HFONT>(SelectObject(dc, font));
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, RGB(255, 255, 255));
+                for (const auto& leaf : zsdyn::Leaves(OnScreen(it->second.tree), ToModel(bounds))) {
+                    if (leaf.windows.size() < 2) continue;
+                    RECT badge{leaf.rect.right - 64, leaf.rect.top + 12, leaf.rect.right - 12, leaf.rect.top + 42};
+                    OffsetRect(&badge, -bounds.left, -bounds.top);
+                    HBRUSH fill = CreateSolidBrush(RGB(30, 190, 200));
+                    FillRect(dc, &badge, fill);
+                    DeleteObject(fill);
+                    const std::wstring count = L"x" + std::to_wstring(leaf.windows.size());
+                    DrawTextW(dc, count.c_str(), -1, &badge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+                SelectObject(dc, oldFont);
+                DeleteObject(font);
             }
         }
+        BitBlt(screen, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldFrame);
+        DeleteObject(frame);
+        DeleteDC(dc);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -605,5 +748,93 @@ void ReconcileDynamicWindowStates(AppState& app) {
             continue;
         }
         ReflowMonitor(app, key, false);
+    }
+    std::erase_if(app.dynamicMinSizes, [](const auto& entry) { return !IsWindow(entry.first); });
+    SaveDynamicLayouts(app);
+}
+
+namespace {
+constexpr wchar_t kLayoutSection[] = L"DynamicLayouts";
+
+struct OpenWindow {
+    HWND window{};
+    std::wstring exeAndClass;
+    std::wstring identity;
+};
+
+std::vector<OpenWindow> OpenWindows(const AppState& app) {
+    struct Context {
+        const AppState* app;
+        std::vector<OpenWindow>* out;
+    };
+    std::vector<OpenWindow> out;
+    Context context{&app, &out};
+    EnumWindows([](HWND window, LPARAM param) -> BOOL {
+        auto& ctx = *reinterpret_cast<Context*>(param);
+        if (window == ctx.app->overlay || !IsWindowVisible(window) || GetWindow(window, GW_OWNER) ||
+            (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) ||
+            IsWindowExcluded(*ctx.app, window))
+            return TRUE;
+        OpenWindow open{window, {}, WindowIdentity(window)};
+        open.exeAndClass = open.identity.substr(0, open.identity.rfind(L'\t'));
+        ctx.out->push_back(std::move(open));
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&context));
+    return out;
+}
+}  // namespace
+
+void RestoreDynamicLayouts(AppState& app) {
+    std::vector<wchar_t> names(32768);
+    const DWORD length = GetPrivateProfileStringW(kLayoutSection, nullptr, L"", names.data(),
+                                                  static_cast<DWORD>(names.size()), StateFilePath().c_str());
+    if (length == 0) return;
+    auto open = OpenWindows(app);
+    std::vector<char> used(open.size(), 0);
+    for (const wchar_t* name = names.data(); *name; name += wcslen(name) + 1) {
+        std::vector<wchar_t> value(65536);
+        GetPrivateProfileStringW(kLayoutSection, name, L"", value.data(),
+                                 static_cast<DWORD>(value.size()), StateFilePath().c_str());
+        const std::wstring text = value.data();
+        const auto keys = zsdyn::SerializedWindowKeys(text);
+        // Match exact identities first so a title fallback cannot steal a
+        // window that belongs to a later tile.
+        std::vector<WindowId> windows(keys.size(), 0);
+        for (int pass = 0; pass < 2; ++pass) {
+            for (size_t k = 0; k < keys.size(); ++k) {
+                if (windows[k]) continue;
+                const std::wstring exeAndClass = keys[k].substr(0, keys[k].rfind(L'\t'));
+                for (size_t i = 0; i < open.size(); ++i) {
+                    if (used[i]) continue;
+                    if (pass == 0 ? open[i].identity == keys[k] : open[i].exeAndClass == exeAndClass) {
+                        windows[k] = Id(open[i].window);
+                        used[i] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        auto tree = zsdyn::Deserialize(text, windows);
+        if (!tree || tree->Empty()) continue;
+        auto& state = app.dynamicMonitors[name];
+        state.tree = std::move(*tree);
+        state.applied.clear();
+        state.revision = state.savedRevision = 1;
+    }
+}
+
+void SaveDynamicLayouts(AppState& app) {
+    if (app.dynamicSaveFrozen) return;
+    for (auto& [key, state] : app.dynamicMonitors) {
+        if (state.revision == state.savedRevision) continue;
+        if (state.tree.Empty()) {
+            WritePrivateProfileStringW(kLayoutSection, key.c_str(), nullptr, StateFilePath().c_str());
+        } else {
+            const std::wstring text = zsdyn::Serialize(state.tree, [](WindowId id) {
+                return IsWindow(Hwnd(id)) ? WindowIdentity(Hwnd(id)) : std::wstring{};
+            });
+            WritePrivateProfileStringW(kLayoutSection, key.c_str(), text.c_str(), StateFilePath().c_str());
+        }
+        state.savedRevision = state.revision;
     }
 }

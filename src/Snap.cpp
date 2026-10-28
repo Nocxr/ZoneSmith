@@ -159,6 +159,8 @@ void ApplyPendingOperation(
 ) {
     KillTimer(app.overlay,kSnapTimerId);
     if (ApplyPendingDynamicOperation(app)) {
+        app.pendingSnap = {};
+        app.pendingRestore = {};
         return;
     }
 
@@ -179,20 +181,9 @@ void ApplyPendingOperation(
             );
         }
 
-        const RECT target =
-            app.pendingSnap.target;
-
-        SetWindowPos(
+        SetVisibleWindowRect(
             app.pendingSnap.window,
-            nullptr,
-            target.left,
-            target.top,
-            target.right -
-                target.left,
-            target.bottom -
-                target.top,
-            SWP_NOACTIVATE |
-                SWP_NOZORDER
+            app.pendingSnap.target
         );
 
         app.pendingSnap = {};

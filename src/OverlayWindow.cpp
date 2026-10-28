@@ -36,6 +36,16 @@ LRESULT CALLBACK ZoneSmithOverlayProc(
             EndDynamicDividerDrag(app);
         }
         return 0;
+    case WM_QUERYENDSESSION:
+        // Apps closing during logoff/shutdown must not erase saved layouts.
+        SaveDynamicLayouts(app);
+        app.dynamicSaveFrozen = true;
+        return TRUE;
+
+    case WM_ENDSESSION:
+        if (!wParam) app.dynamicSaveFrozen = false;
+        return 0;
+
     case WM_PAINT:
         PaintOverlay(
             app,

@@ -5,6 +5,13 @@
 
 RECT VisibleWindowRect(HWND window);
 
+// Moves/sizes a window so its visible frame (excluding the invisible resize
+// borders of Windows 10/11) matches target.
+void SetVisibleWindowRect(
+    HWND window,
+    const RECT& target
+);
+
 std::wstring WindowExecutableName(
     HWND window
 );

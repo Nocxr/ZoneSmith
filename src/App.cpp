@@ -149,6 +149,8 @@ bool InitializeZoneSmith(
         ShutdownZoneSmith(app);
         return false;
     }
+
+    RestoreDynamicLayouts(app);
     return true;
 }
 
@@ -160,6 +162,7 @@ void ShutdownZoneSmith(
     );
 
     if(app.overlay) KillTimer(app.overlay,kDynamicReconcileTimerId);
+    SaveDynamicLayouts(app);
     RemoveDynamicWindowHooks(app);
     HideOverlay(app);
     DestroyDynamicDividerGuides(app);

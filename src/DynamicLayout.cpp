@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 #include <limits>
 #include <unordered_set>
 
@@ -449,6 +450,198 @@ std::optional<Tree> SetRatio(const Tree& tree, int splitId, double ratio) {
     if (index < 0 || t.nodes[index].IsLeaf() || !std::isfinite(ratio)) return std::nullopt;
     t.nodes[index].ratio = std::clamp(ratio, kMinDividerRatio, kMaxDividerRatio);
     return Checked(std::move(t));
+}
+
+std::optional<Tree> ResizeTile(const Tree& full, const Tree& visible, Rect work,
+                               WindowId window, Rect resized) {
+    constexpr long kTolerance = 2;
+    std::optional<Rect> tile;
+    for (const auto& leaf : Leaves(visible, work))
+        if (std::find(leaf.windows.begin(), leaf.windows.end(), window) != leaf.windows.end())
+            tile = leaf.rect;
+    if (!tile) return std::nullopt;
+
+    Tree t = full;
+    for (const auto& d : Dividers(visible, work)) {
+        // Only dividers of regions containing the tile can border it.
+        if (tile->left < d.bounds.left || tile->right > d.bounds.right ||
+            tile->top < d.bounds.top || tile->bottom > d.bounds.bottom)
+            continue;
+        long target;
+        if (d.vertical && d.position == tile->right) target = resized.right;
+        else if (d.vertical && d.position == tile->left) target = resized.left;
+        else if (!d.vertical && d.position == tile->bottom) target = resized.bottom;
+        else if (!d.vertical && d.position == tile->top) target = resized.top;
+        else continue;
+        if (std::abs(target - d.position) <= kTolerance) continue;
+        const long origin = d.vertical ? d.bounds.left : d.bounds.top;
+        const long extent = std::max(1L, d.vertical ? d.bounds.Width() : d.bounds.Height());
+        auto updated = SetRatio(t, d.id, static_cast<double>(target - origin) / extent);
+        if (!updated) return std::nullopt;
+        t = std::move(*updated);
+    }
+    return t;
+}
+
+std::vector<WindowId> TooSmall(const Tree& visible, Rect work, long padding,
+                               const std::function<Size(WindowId)>& minimum) {
+    std::vector<WindowId> out;
+    for (const auto& p : Placements(visible, work)) {
+        const Size need = minimum(p.window);
+        if (p.rect.Width() - 2 * padding < need.width || p.rect.Height() - 2 * padding < need.height)
+            out.push_back(p.window);
+    }
+    return out;
+}
+
+namespace {
+
+// Printable ASCII passes through; everything else (spaces, '%', non-ASCII)
+// becomes %XXXX so the text survives INI files and token splitting.
+std::wstring Escape(const std::wstring& text) {
+    std::wstring out;
+    for (wchar_t ch : text) {
+        if (ch > 0x20 && ch < 0x7F && ch != L'%') {
+            out.push_back(ch);
+        } else {
+            wchar_t code[8]{};
+            std::swprintf(code, 8, L"%%%04X", static_cast<unsigned>(ch) & 0xFFFFu);
+            out += code;
+        }
+    }
+    return out;
+}
+
+std::optional<std::wstring> Unescape(const std::wstring& text) {
+    std::wstring out;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != L'%') {
+            out.push_back(text[i]);
+            continue;
+        }
+        if (i + 4 >= text.size()) return std::nullopt;
+        unsigned value = 0;
+        for (size_t j = 1; j <= 4; ++j) {
+            const wchar_t c = text[i + j];
+            value <<= 4;
+            if (c >= L'0' && c <= L'9') value |= static_cast<unsigned>(c - L'0');
+            else if (c >= L'A' && c <= L'F') value |= static_cast<unsigned>(c - L'A' + 10);
+            else return std::nullopt;
+        }
+        out.push_back(static_cast<wchar_t>(value));
+        i += 4;
+    }
+    return out;
+}
+
+std::vector<std::wstring> Tokens(const std::wstring& text) {
+    std::vector<std::wstring> out;
+    size_t start = 0;
+    while (start < text.size()) {
+        const size_t end = text.find(L' ', start);
+        const size_t stop = end == std::wstring::npos ? text.size() : end;
+        if (stop > start) out.push_back(text.substr(start, stop - start));
+        start = stop + 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+std::wstring Serialize(const Tree& tree, const std::function<std::wstring(WindowId)>& key) {
+    std::wstring out;
+    const int count = static_cast<int>(tree.nodes.size());
+    const auto walk = [&](auto&& self, int index, int depth) -> void {
+        if (index < 0 || index >= count || depth > count) return;
+        const Node& n = tree.nodes[index];
+        if (!out.empty()) out.push_back(L' ');
+        if (n.IsLeaf()) {
+            out += L"L" + std::to_wstring(n.windows.size());
+            for (WindowId w : n.windows) out += L" W" + Escape(key(w));
+            return;
+        }
+        out += std::wstring(L"S") + (n.vertical ? L"v" : L"h") + std::to_wstring(n.ratio);
+        self(self, n.first, depth + 1);
+        self(self, n.second, depth + 1);
+    };
+    walk(walk, tree.root, 0);
+    return out;
+}
+
+std::vector<std::wstring> SerializedWindowKeys(const std::wstring& text) {
+    std::vector<std::wstring> out;
+    for (const auto& token : Tokens(text)) {
+        if (token.empty() || token[0] != L'W') continue;
+        auto key = Unescape(token.substr(1));
+        out.push_back(key ? *key : std::wstring{});
+    }
+    return out;
+}
+
+std::optional<Tree> Deserialize(const std::wstring& text, const std::vector<WindowId>& windows) {
+    if (text.empty()) return Tree{};
+    const auto tokens = Tokens(text);
+    size_t position = 0;
+    size_t windowIndex = 0;
+    Tree raw;
+    bool ok = true;
+    const auto parse = [&](auto&& self, int depth) -> int {
+        if (!ok || depth > 64 || position >= tokens.size()) {
+            ok = false;
+            return -1;
+        }
+        const std::wstring token = tokens[position++];
+        Node n;
+        n.id = n.region = raw.nextId++;
+        if (token.size() >= 2 && token[0] == L'L') {
+            const long count = std::wcstol(token.c_str() + 1, nullptr, 10);
+            if (count < 1 || count > 64) {
+                ok = false;
+                return -1;
+            }
+            for (long i = 0; i < count; ++i) {
+                if (position >= tokens.size() || tokens[position][0] != L'W') {
+                    ok = false;
+                    return -1;
+                }
+                ++position;
+                const WindowId w = windowIndex < windows.size() ? windows[windowIndex] : 0;
+                ++windowIndex;
+                if (w) n.windows.push_back(w);
+            }
+            raw.nodes.push_back(std::move(n));
+            return static_cast<int>(raw.nodes.size()) - 1;
+        }
+        if (token.size() >= 3 && token[0] == L'S' && (token[1] == L'v' || token[1] == L'h')) {
+            wchar_t* end = nullptr;
+            n.vertical = token[1] == L'v';
+            n.ratio = std::wcstod(token.c_str() + 2, &end);
+            if (!end || *end != L'\0' || !std::isfinite(n.ratio) || n.ratio <= 0.0 || n.ratio >= 1.0) {
+                ok = false;
+                return -1;
+            }
+            const int index = static_cast<int>(raw.nodes.size());
+            raw.nodes.push_back(n);
+            const int first = self(self, depth + 1);
+            const int second = self(self, depth + 1);
+            raw.nodes[index].first = first;
+            raw.nodes[index].second = second;
+            return index;
+        }
+        ok = false;
+        return -1;
+    };
+    raw.root = parse(parse, 0);
+    if (!ok || position != tokens.size()) return std::nullopt;
+    // A window matched twice keeps its first tile; empty tiles collapse.
+    std::unordered_set<WindowId> seen;
+    for (auto& n : raw.nodes) {
+        std::vector<WindowId> unique;
+        for (WindowId w : n.windows)
+            if (seen.insert(w).second) unique.push_back(w);
+        n.windows = std::move(unique);
+    }
+    return Checked(Compact(raw));
 }
 
 }  // namespace zsdyn

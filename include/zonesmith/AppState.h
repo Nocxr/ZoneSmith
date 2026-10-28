@@ -41,6 +41,7 @@ struct DynamicMonitorState {
     zsdyn::Tree tree;
     std::vector<zsdyn::WindowPlacement> applied;
     unsigned int revision{};
+    unsigned int savedRevision{};
 };
 
 // One drop computed from the current drag position. The overlay paints it and
@@ -55,6 +56,9 @@ struct DynamicDropPlan {
     int optionCount{};
     zsdyn::Tree result;
     unsigned int revision{};
+    // Non-empty when the drop would squeeze a window below its minimum
+    // size; the preview shows why and the drop does nothing.
+    std::wstring blocked;
     // Set when the dragged window leaves a layout on another monitor.
     bool hasSource{};
     std::wstring sourceKey;
@@ -86,6 +90,15 @@ struct AppState {
     SIZE dynamicDragStartSize{};
     // Right-click hid the overlay during this drag: drop floats the window.
     bool dynamicOverlayDismissed{};
+    // Escape during this drag: no layout change; a tiled window returns.
+    bool dynamicDragCancelled{};
+    // Tiled window being resized by its border; dividers follow on release.
+    HWND dynamicResizeWindow{};
+    HWND pendingDynamicResize{};
+    // Minimum visible sizes learned from windows that refused to shrink.
+    std::unordered_map<HWND, SIZE> dynamicMinSizes;
+    // Windows is ending the session: apps closing must not erase saved layouts.
+    bool dynamicSaveFrozen{};
     int dynamicOptionIndex{};
     std::wstring dynamicOptionContext;
     DynamicDropPlan dynamicPreview;
@@ -98,10 +111,6 @@ struct AppState {
     bool dynamicDividerApplying{};
     bool dynamicDividerMoveQueued{};
     POINT dynamicDividerLatest{};
-    unsigned int dynamicDividerCaptureCount{};
-    unsigned int dynamicDividerMissCount{};
-    unsigned int dynamicDividerMoveCount{};
-    unsigned int dynamicDividerApplyCount{};
     RECT dynamicDividerBounds{};
 
     POINT cursor{};

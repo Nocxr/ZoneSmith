@@ -15,6 +15,10 @@ bool UpdateDynamicDragPreview(AppState& app, POINT cursor);
 void CycleDynamicDropOption(AppState& app);
 void QueueDynamicDrop(AppState& app);
 void QueueDynamicUndock(AppState& app, HWND window);
+// Puts a tiled window back in its tile (cancelled drag).
+void QueueDynamicReturn(AppState& app, HWND window);
+// A tiled window was resized by its border: move the dividers it touched.
+void QueueDynamicResize(AppState& app, HWND window);
 // Returns true when a dynamic drop was handled (so static snapping is skipped).
 bool ApplyPendingDynamicOperation(AppState& app);
 void PaintDynamicOverlay(const AppState& app, HDC dc, RECT client);
@@ -30,3 +34,8 @@ void DestroyDynamicDividerGuides(AppState& app);
 bool InstallDynamicWindowHooks(AppState& app);
 void RemoveDynamicWindowHooks(AppState& app);
 void ReconcileDynamicWindowStates(AppState& app);
+
+// Layouts are saved to the state file and re-matched to open windows (by
+// executable, class and title) at startup.
+void RestoreDynamicLayouts(AppState& app);
+void SaveDynamicLayouts(AppState& app);

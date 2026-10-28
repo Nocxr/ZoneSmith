@@ -159,4 +159,27 @@ std::vector<Divider> Dividers(const Tree& tree, Rect work);
 std::optional<Divider> DividerAt(const Tree& tree, Rect work, Point p, int tolerance);
 std::optional<Tree> SetRatio(const Tree& tree, int splitId, double ratio);
 
+// A tiled window was resized by its border to `resized` (tile coordinates,
+// i.e. padding already removed). Every edge that moved and sits on a divider
+// moves that divider; edges on the monitor boundary are ignored. Hit-testing
+// uses `visible`; ratios are written to the same split ids in `full`.
+std::optional<Tree> ResizeTile(const Tree& full, const Tree& visible, Rect work,
+                               WindowId window, Rect resized);
+
+struct Size {
+    long width{};
+    long height{};
+};
+// Windows whose tile (minus padding on each side) is smaller than their
+// minimum size.
+std::vector<WindowId> TooSmall(const Tree& visible, Rect work, long padding,
+                               const std::function<Size(WindowId)>& minimum);
+
+// Text form of a tree for saving across restarts. Window identities come from
+// `key` and are escaped; Deserialize takes the windows matched to those keys
+// in order (0 = no match, dropped) and assigns fresh node ids.
+std::wstring Serialize(const Tree& tree, const std::function<std::wstring(WindowId)>& key);
+std::vector<std::wstring> SerializedWindowKeys(const std::wstring& text);
+std::optional<Tree> Deserialize(const std::wstring& text, const std::vector<WindowId>& windows);
+
 }  // namespace zsdyn

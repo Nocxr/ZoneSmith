@@ -321,6 +321,103 @@ void TestMonitorsAreIndependent() {
     CHECK((RectOf(r->tree, C, second) == Rect{1920, 0, 2880, 1080}));
 }
 
+void TestBorderResizeMovesDividers() {
+    const Tree t = SideBySide();
+    // Drag A's right border to x=1200: the shared divider follows.
+    auto r = ResizeTile(t, t, kWork, A, Rect{0, 0, 1200, 1080});
+    CHECK(r && (RectOf(*r, A) == Rect{0, 0, 1200, 1080}));
+    CHECK(r && (RectOf(*r, B) == Rect{1200, 0, 1920, 1080}));
+    // Dragging an edge on the monitor boundary changes nothing.
+    auto outer = ResizeTile(t, t, kWork, A, Rect{-60, 0, 960, 1080});
+    CHECK(outer && *outer == t);
+
+    // Nested: C's top edge moves the B/C divider, its left edge the root one.
+    const Tree c = ColumnLayout();
+    auto nested = ResizeTile(c, c, kWork, C, Rect{800, 400, 1920, 1080});
+    CHECK(nested.has_value());
+    if (nested) {
+        CHECK((RectOf(*nested, B) == Rect{800, 0, 1920, 400}));
+        CHECK((RectOf(*nested, C) == Rect{800, 400, 1920, 1080}));
+        CHECK((RectOf(*nested, A) == Rect{0, 0, 800, 1080}));
+    }
+    CHECK(!ResizeTile(c, c, kWork, D, Rect{0, 0, 10, 10}));
+}
+
+void TestBorderResizeWithHiddenSibling() {
+    const Tree full = ColumnLayout();
+    const Tree visible = Visible(full, [](WindowId w) { return w == B; });
+    // C fills the right column while B is minimized: its top edge is the
+    // monitor edge, so only its left edge can move a divider.
+    auto r = ResizeTile(full, visible, kWork, C, Rect{900, 300, 1920, 1080});
+    CHECK(r.has_value());
+    if (!r) return;
+    CHECK((RectOf(*r, A) == Rect{0, 0, 900, 1080}));
+    // B and C keep their split when B is restored.
+    CHECK((RectOf(*r, B) == Rect{900, 0, 1920, 540}));
+}
+
+void TestMinimumSizes() {
+    const Tree t = SideBySide();
+    const auto none = [](WindowId) { return Size{}; };
+    CHECK(TooSmall(t, kWork, 0, none).empty());
+    const auto wideA = [](WindowId w) { return w == A ? Size{1000, 0} : Size{}; };
+    CHECK(TooSmall(t, kWork, 0, wideA) == std::vector<WindowId>{A});
+    const auto fits = [](WindowId w) { return w == A ? Size{950, 0} : Size{}; };
+    CHECK(TooSmall(t, kWork, 0, fits).empty());
+    CHECK(TooSmall(t, kWork, 8, fits) == std::vector<WindowId>{A});  // padding counts
+}
+
+void TestSerializeRoundTrip() {
+    Tree t = Drop(ColumnLayout(), {1440, 300}, D, DropKind::Stack);
+    auto adjusted = SetRatio(t, t.nodes[t.root].id, 0.3);
+    CHECK(adjusted.has_value());
+    if (!adjusted) return;
+    t = *adjusted;
+    const auto key = [](WindowId w) {
+        switch (w) {
+        case A: return std::wstring(L"app.exe\tClass\tTitle with spaces");
+        case B: return std::wstring(L"b.exe\tC\t100% \x00FCn\x00EF");
+        case C: return std::wstring(L"c.exe\tC\t");
+        default: return std::wstring(L"d.exe\tC\tD");
+        }
+    };
+    const std::wstring text = Serialize(t, key);
+    CHECK(text.find(L'\t') == std::wstring::npos);
+    const auto keys = SerializedWindowKeys(text);
+    CHECK(keys.size() == 4);
+    if (keys.size() != 4) return;
+
+    std::vector<WindowId> windows;
+    for (const auto& k : keys) {
+        for (WindowId w : {A, B, C, D})
+            if (key(w) == k) windows.push_back(w);
+    }
+    CHECK(windows.size() == 4);
+    auto restored = Deserialize(text, windows);
+    CHECK(restored.has_value());
+    if (restored) CHECK(Placements(*restored, kWork) == Placements(t, kWork));
+
+    // A window that is no longer open: the others take its space.
+    auto partial = windows;
+    for (auto& w : partial)
+        if (w == A) w = 0;
+    auto missing = Deserialize(text, partial);
+    CHECK(missing && Validate(*missing).empty() && !Contains(*missing, A));
+    CHECK(missing && (RectOf(*missing, B) == Rect{0, 0, 1920, 540}));
+
+    // One window matched to two keys keeps only its first tile.
+    auto twice = windows;
+    twice[1] = twice[0];
+    auto deduped = Deserialize(text, twice);
+    CHECK(deduped && Validate(*deduped).empty());
+
+    CHECK(!Deserialize(L"Sv0.5 L1 Wx", {A}));       // missing second child
+    CHECK(!Deserialize(L"Sv1.5 L1 Wx L1 Wy", {A, B})); // bad ratio
+    CHECK(!Deserialize(L"Q", {}));
+    auto empty = Deserialize(L"", {});
+    CHECK(empty && empty->Empty());
+}
+
 }  // namespace
 
 int main() {
@@ -344,6 +441,10 @@ int main() {
         {"validation rejects corruption", TestValidationRejectsCorruption},
         {"no node growth across many operations", TestNoNodeGrowthAcrossManyOperations},
         {"monitors are independent", TestMonitorsAreIndependent},
+        {"border resize moves dividers", TestBorderResizeMovesDividers},
+        {"border resize with hidden sibling", TestBorderResizeWithHiddenSibling},
+        {"minimum sizes", TestMinimumSizes},
+        {"serialize round trip", TestSerializeRoundTrip},
     };
     for (const auto& [name, test] : tests) {
         const int before = g_failures;
