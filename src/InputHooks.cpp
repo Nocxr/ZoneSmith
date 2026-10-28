@@ -585,6 +585,18 @@ LRESULT CALLBACK KeyboardHook(
     const bool keyUp =
         message == WM_KEYUP ||
         message == WM_SYSKEYUP;
+    // Modifier state during a low-level hook can lag the transition.
+    // Use the incoming event for the key being changed.
+    const bool ctrlEvent=event->vkCode==VK_CONTROL ||
+        event->vkCode==VK_LCONTROL || event->vkCode==VK_RCONTROL;
+    const bool altEvent=event->vkCode==VK_MENU ||
+        event->vkCode==VK_LMENU || event->vkCode==VK_RMENU;
+    if(ctrlEvent || altEvent) {
+        const bool ctrl=ctrlEvent ? keyDown : (GetAsyncKeyState(VK_CONTROL)&0x8000)!=0;
+        const bool alt=altEvent ? keyDown : (GetAsyncKeyState(VK_MENU)&0x8000)!=0;
+        UpdateDynamicDividerGuides(app,ctrl && alt);
+    }
+
 
     int zoneNumber = -1;
 
@@ -942,4 +954,11 @@ void CALLBACK MoveSizeEventHook(
 
         HideOverlay(app);
     }
+}
+void CALLBACK DynamicWindowDestroyHook(HWINEVENTHOOK,DWORD event,HWND window,
+                                       LONG objectId,LONG childId,DWORD,DWORD) {
+    if(!g_app || event!=EVENT_OBJECT_DESTROY || objectId!=OBJID_WINDOW ||
+       childId!=CHILDID_SELF || !window)
+        return;
+    ReleaseDestroyedDynamicWindow(*g_app,window);
 }
