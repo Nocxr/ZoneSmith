@@ -18,6 +18,7 @@ constexpr int kMaxZones = 9;
 constexpr int kQuitHotkeyId = 1;
 
 constexpr UINT_PTR kSnapTimerId = 1;
+constexpr UINT_PTR kDynamicReconcileTimerId = 2;
 
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kDividerMoveMessage = WM_APP + 30;
@@ -49,6 +50,8 @@ struct AppState {
     HWND dividerGuideWindow{};
     bool dividerGuideVisible{};
     bool ignoreDividerAdjacentDrag{};
+    HWND dynamicTitleDragCandidate{};
+    bool dynamicReflowApplying{};
 
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
