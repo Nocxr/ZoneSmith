@@ -16,7 +16,8 @@ Use either Dashboard's enabled module or the standalone app as the active hook h
 
 `Dynamic` is a built-in layout at the end of the normal wheel-cycled layout list.
 Select it by dragging a window, opening ZoneSmith's overlay with right-click while dragging,
-and scrolling the wheel until `Dynamic` appears. Selection remains per monitor; existing
+and scrolling the wheel until `Dynamic` appears. Once selected on a monitor,
+the Dynamic drop overlay opens automatically when dragging a window there. Selection remains per monitor; existing
 static INI layouts remain available.
 
 With Dynamic active, drop the first window to fill the monitor's work area.
