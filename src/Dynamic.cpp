@@ -158,8 +158,9 @@ Placement ResolvePlacement(const Tree& tree,RECT work,POINT point) {
     const auto drop=ChooseDrop(leaf.rect,point);
     if(drop.valid)
         return {true,false,false,drop.vertical,drop.before,leaf.index,drop.preview};
-    // Center of an occupied tile swaps the dragged window with its occupant.
-    return {true,false,true,false,false,leaf.index,leaf.rect};
+    // Center swaps need an explicit occupied source slot. For this first
+    // placement pass, do not evict an unrelated occupant on a center drop.
+    return {};
 }
 RECT PreviewPlacement(const Tree& source,RECT work,POINT point) {
     return ResolvePlacement(source,work,point).destination;
@@ -214,26 +215,11 @@ void DockDynamicWindow(AppState& app,HWND window,POINT cursor) {
     Remove(proposal,proposal.root,window);
     const auto placement=ResolvePlacement(proposal,work,cursor);
     if(!placement.valid) return;
-    // Swapping an occupied leaf keeps the displaced window in the source slot
-    // when one exists. Otherwise it remains a floating window.
-    HWND displaced=nullptr;
-    if(placement.swap && placement.leaf>=0)
-        displaced=proposal.nodes[placement.leaf].window;
     if(!ApplyPlacement(proposal,window,work,cursor)) return;
     for(auto& [monitor,tree]:app.dynamicTrees) {
         if(monitor==key) continue;
         if(!ContainsWindow(tree,tree.root,window)) continue;
         Remove(tree,tree.root,window);
-        if(displaced) {
-            if(tree.root<0) {
-                tree.nodes.push_back(DynamicNode{displaced});
-                tree.root=static_cast<int>(tree.nodes.size())-1;
-            } else {
-                // Swapping back into a source tile is preferable to dropping it.
-                auto old=FindLeaf(tree,tree.root,work,cursor);
-                if(old.index>=0) tree.nodes[old.index].window=displaced;
-            }
-        }
         // Source-monitor reflow uses its own display bounds.
         for(const auto& node:tree.nodes) {
             if(!HasChildren(node) && node.window &&
