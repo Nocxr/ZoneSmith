@@ -20,6 +20,8 @@ constexpr int kQuitHotkeyId = 1;
 constexpr UINT_PTR kSnapTimerId = 1;
 
 constexpr UINT kTrayMessage = WM_APP + 1;
+constexpr UINT kDynamicDividerMoveMessage = WM_APP + 10;
+constexpr UINT kDynamicDividerEndMessage = WM_APP + 11;
 constexpr UINT kTrayInstructionsId = 1001;
 constexpr UINT kTrayLayoutsId = 1002;
 constexpr UINT kTrayPauseId = 1003;
@@ -62,6 +64,8 @@ struct AppState {
     std::wstring dynamicDividerMonitor;
     int dynamicDividerNode{-1};
     RECT dynamicDividerBounds{};
+    POINT dynamicDividerCursor{};
+    bool dynamicDividerUpdateQueued{};
 
     POINT cursor{};
 
