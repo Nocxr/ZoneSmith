@@ -378,7 +378,7 @@ void BeginDynamicLiveResize(AppState& app, HWND window) {
 void ApplyDynamicLiveResize(AppState& app) {
     app.dynamicResizeQueued = false;
     const HWND window = app.dynamicResizeWindow;
-    if (!window || !IsWindow(window) || app.dynamicResizeKey.empty()) return;
+    if (app.paused || !window || !IsWindow(window) || app.dynamicResizeKey.empty()) return;
     const auto it = app.dynamicMonitors.find(app.dynamicResizeKey);
     RECT work{};
     if (it == app.dynamicMonitors.end() || !WorkForKey(app.dynamicResizeKey, work)) return;
@@ -816,8 +816,9 @@ void RemoveDynamicWindowHooks(AppState& app) {
 }
 
 void ReconcileDynamicWindowStates(AppState& app) {
-    // Never move windows under an active gesture or before a queued drop.
-    if (app.dynamicDividerNode >= 0 || app.dynamicReflowApplying || app.dragWindow ||
+    // Never move windows while paused, under an active gesture or before a
+    // queued drop. Changes made while paused are applied on resume.
+    if (app.paused || app.dynamicDividerNode >= 0 || app.dynamicReflowApplying || app.dragWindow ||
         app.dynamicResizeWindow || app.pendingDynamicDrop.window || app.pendingDynamicUndock ||
         app.pendingDynamicResize)
         return;
