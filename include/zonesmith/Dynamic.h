@@ -15,3 +15,6 @@ bool DetachDynamicWindow(AppState& app, HWND window);
 // Click-through guide overlay while the Ctrl+Alt divider-edit gesture is active.
 void UpdateDynamicDividerGuides(AppState& app, bool enabled);
 void DestroyDynamicDividerGuides(AppState& app);
+
+// Immediately release destroyed windows and reclaim their tiles.
+void ReleaseDestroyedDynamicWindow(AppState& app, HWND window);
