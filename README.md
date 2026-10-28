@@ -34,3 +34,14 @@ on top of applications. Divider ratios persist while the app runs, but window
 membership and split ratios are not yet saved across ZoneSmith restarts.
 Closed windows are pruned when the next window is docked. Static layouts
 and their persistence are unaffected.
+
+### Live dynamic drop previews
+
+When Dynamic is selected, start dragging a window by its title bar. The overlay
+now outlines every proposed tile continuously as the pointer moves; existing
+application windows are unchanged until drop. Hover in the outer 8% of the
+monitor to preview a new half-monitor split spanning the full layout, or within
+the outer 25% of a tile to split only that tile. Releasing over a valid preview
+commits the same split. Dropping in the center of an occupied tile currently
+does nothing: swap/stack and multi-slot selections are not yet part of this
+implementation. Ctrl+Alt divider adjustment and fixed layouts are unchanged.
