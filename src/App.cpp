@@ -138,6 +138,10 @@ bool InitializeZoneSmith(
         return false;
     }
 
+    if(!SetTimer(app.overlay,kDynamicReconcileTimerId,500,nullptr)) {
+        ShutdownZoneSmith(app);
+        return false;
+    }
     return true;
 }
 
@@ -148,6 +152,7 @@ void ShutdownZoneSmith(
         app
     );
 
+    if(app.overlay) KillTimer(app.overlay,kDynamicReconcileTimerId);
     HideOverlay(app);
     DestroyDynamicDividerGuides(app);
 
