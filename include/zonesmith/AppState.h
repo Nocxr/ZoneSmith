@@ -52,6 +52,7 @@ struct AppState {
     bool ignoreDividerAdjacentDrag{};
     HWND dynamicTitleDragCandidate{};
     bool dynamicReflowApplying{};
+    std::unordered_map<HWND, bool> dynamicMinimizedStates;
 
     HHOOK mouseHook{};
     HHOOK keyboardHook{};
