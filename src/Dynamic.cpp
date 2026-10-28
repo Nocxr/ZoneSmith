@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <cwchar>
 
 namespace {
 using Tree = DynamicTree;
@@ -62,7 +63,7 @@ Hit FindLeaf(const Tree& tree,int index,RECT bounds,POINT point) {
     auto first=FindLeaf(tree,n.first,a,point);
     return first.index>=0?first:FindLeaf(tree,n.second,b,point);
 }
-struct Edge { int index{-1}; RECT rect{}; int distance{12}; };
+struct Edge { int index{-1}; RECT rect{}; int distance{30}; };
 void FindEdge(const Tree& tree,int index,RECT rect,POINT point,Edge& found) {
     if(index<0) return;
     const auto& n=tree.nodes[index];
@@ -244,7 +245,7 @@ bool StartDynamicDividerDrag(AppState& app,POINT cursor) {
     app.dynamicDividerBounds=edge.rect;
     ++app.dynamicDividerCaptureCount;
     wchar_t log[256]{};
-    swprintf_s(log,L"[ZoneSmith divider] CAPTURE node=%d x=%ld y=%ld tolerance=12\\n",
+    swprintf_s(log,L"[ZoneSmith divider] CAPTURE node=%d x=%ld y=%ld tolerance=30\\n",
                edge.index,cursor.x,cursor.y);
     OutputDebugStringW(log);
     return true;
