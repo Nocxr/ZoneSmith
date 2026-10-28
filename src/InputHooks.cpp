@@ -72,6 +72,8 @@ LRESULT CALLBACK MouseHook(
 
     app.cursor =
         event->pt;
+    if(app.dynamicDividerNode>=0 || app.dynamicGuidesVisible)
+        UpdateDynamicDividerGuides(app,true);
 
     //
     // Use Windows' actual current modifier state for mouse
@@ -89,6 +91,8 @@ LRESULT CALLBACK MouseHook(
         }
         if(message == WM_LBUTTONUP) {
             EndDynamicDividerDrag(app);
+            UpdateDynamicDividerGuides(app,(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+                                              (GetAsyncKeyState(VK_MENU)&0x8000));
             app.leftDown=false;
             app.dragWindow=nullptr;
             HideOverlay(app);
@@ -102,6 +106,7 @@ LRESULT CALLBACK MouseHook(
        (GetAsyncKeyState(VK_CONTROL)&0x8000) &&
        (GetAsyncKeyState(VK_MENU)&0x8000) &&
        StartDynamicDividerDrag(app,event->pt)) {
+        UpdateDynamicDividerGuides(app,true);
         app.dragWindow=nullptr;
         app.leftDown=false;
         HideOverlay(app);
