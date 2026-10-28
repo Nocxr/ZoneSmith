@@ -302,8 +302,6 @@ bool MoveDynamicDividerDrag(AppState& app,POINT cursor) {
     const double minRatio=std::min(0.45, 240.0/span);
     n.ratio=std::clamp(double(position-origin)/span,minRatio,1.0-minRatio);
     // The monitor is stable for a divider drag, even if the cursor leaves it.
-    POINT middle{(app.dynamicDividerBounds.left+app.dynamicDividerBounds.right)/2,
-                 (app.dynamicDividerBounds.top+app.dynamicDividerBounds.bottom)/2};
     // Preview only: live SetWindowPos triggered window-manager feedback and snapback.
     if(app.dynamicGuideOverlay) InvalidateRect(app.dynamicGuideOverlay,nullptr,FALSE);
     return true;
@@ -400,13 +398,14 @@ void ReconcileDynamicWindows(AppState& app) {
                    !ContainsWindow(tree,tree.root,node.window))
                     continue;
                 if(!IsWindow(node.window) || IsIconic(node.window)) {
-                    if(IsWindow(node.window) && IsIconic(node.window))
+                    if(IsWindow(node.window) && IsIconic(node.window)) {
                         app.minimizedDynamicWindows[node.window]=key;
                         if(!app.minimizedDynamicSnapshots.contains(node.window))
                             app.minimizedDynamicSnapshots[node.window]=tree;
-                    else
+                    } else {
                         app.minimizedDynamicWindows.erase(node.window);
                         app.minimizedDynamicSnapshots.erase(node.window);
+                    }
                     invalid=node.window;
                     break;
                 }
