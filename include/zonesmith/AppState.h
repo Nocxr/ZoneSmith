@@ -50,6 +50,9 @@ struct AppState {
     HWINEVENTHOOK moveSizeHook{};
 
     HWND dragWindow{};
+    POINT dynamicDragOrigin{};
+    bool dynamicDragIsMove{};
+    bool dynamicDragDetached{};
     HWND pendingDynamicWindow{};
     POINT pendingDynamicPoint{};
     std::unordered_map<std::wstring, DynamicTree> dynamicTrees;
