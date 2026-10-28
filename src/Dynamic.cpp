@@ -39,7 +39,7 @@ bool Remove(Tree& tree,int& index,HWND window) {
     if (index < 0) return false;
     auto& n=tree.nodes[index];
     if (!HasChildren(n)) {
-        if (n.window != window && n.window && IsWindow(n.window)) return false;
+        if (n.window != window) return false;
         index=-1;
         return true;
     }
@@ -382,4 +382,67 @@ void DestroyDynamicDividerGuides(AppState& app) {
         app.dividerGuideWindow=nullptr;
     }
     if(app.instance) UnregisterClassW(kDividerGuideClass,app.instance);
+}
+
+void ReconcileDynamicWindowStates(AppState& app) {
+    // Preserve the original tree when minimizing. Reflow a temporary active
+    // tree so restoring a window puts it back in its original split.
+    if(app.dynamicDividerNode>=0 || app.dynamicReflowApplying ||
+       app.dragWindow || app.pendingDynamicWindow) return;
+    for(auto& [key,tree]:app.dynamicTrees) {
+        if(tree.root<0) continue;
+        bool changed=false;
+        for(;;) {
+            HWND dead=nullptr;
+            for(const auto& node:tree.nodes) {
+                if(HasChildren(node) || !node.window ||
+                   !ContainsWindow(tree,tree.root,node.window)) continue;
+                if(!IsWindow(node.window)) { dead=node.window; break; }
+            }
+            if(!dead || !Remove(tree,tree.root,dead)) break;
+            app.dynamicMinimizedStates.erase(dead);
+            changed=true;
+        }
+        if(tree.root<0) continue;
+        Tree active=tree;
+        for(const auto& node:tree.nodes) {
+            if(HasChildren(node) || !node.window ||
+               !ContainsWindow(tree,tree.root,node.window)) continue;
+            const bool minimized=IsIconic(node.window)!=FALSE;
+            auto [it,inserted]=app.dynamicMinimizedStates.emplace(node.window,false);
+            if(it->second!=minimized) {
+                changed=true;
+                it->second=minimized;
+            }
+            if(minimized) Remove(active,active.root,node.window);
+        }
+        if(!changed) continue;
+        // Look up owning monitor from its name, not an application that may
+        // currently be minimized or moved.
+        RECT work{};
+        bool found=false;
+        struct Context { const std::wstring* key; RECT* work; bool* found; };
+        Context context{&key,&work,&found};
+        EnumDisplayMonitors(nullptr,nullptr,
+            [](HMONITOR monitor,HDC,LPRECT,LPARAM param)->BOOL {
+                auto& ctx=*reinterpret_cast<Context*>(param);
+                MONITORINFOEXW info{sizeof(info)};
+                if(!GetMonitorInfoW(monitor,&info)) return TRUE;
+                std::wstring name=info.szDevice;
+                if(name.starts_with(L"\\\\.\\")) name.erase(0,4);
+                std::transform(name.begin(),name.end(),name.begin(),
+                    [](wchar_t c){return static_cast<wchar_t>(towlower(c));});
+                if(name!=*ctx.key) return TRUE;
+                *ctx.work=info.rcWork;
+                *ctx.found=true;
+                return FALSE;
+            },reinterpret_cast<LPARAM>(&context));
+        if(found && active.root>=0) {
+            app.dynamicReflowApplying=true;
+            Reflow(active,active.root,work,app.snapPadding);
+            app.dynamicReflowApplying=false;
+        }
+        if(app.dividerGuideWindow)
+            InvalidateRect(app.dividerGuideWindow,nullptr,FALSE);
+    }
 }
